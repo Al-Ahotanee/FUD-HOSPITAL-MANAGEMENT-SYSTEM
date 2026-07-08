@@ -534,7 +534,16 @@ function NurseDashboard() {
           {/* Vitals Form */}
           <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm p-8 h-[600px] flex flex-col">
             {!activePatient ? (
-              <form onSubmit={submitVitals} className="space-y-6">
+              <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
+                <Activity className="h-16 w-16 mb-4 text-slate-200" />
+                <p className="font-medium text-lg text-slate-500">Select a patient from the queue to record vitals</p>
+              </div>
+            ) : (
+              <form onSubmit={submitVitals} className="space-y-6 flex-1 flex flex-col">
+                <div className="mb-2 pb-4 border-b border-slate-100 flex justify-between items-center">
+                  <h3 className="text-xl font-bold text-slate-800">{activePatient.patient_name}</h3>
+                  <span className="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider">{activePatient.patient_type}</span>
+                </div>
                 <div className="grid grid-cols-2 gap-6">
                   <div>
                     <label className="block text-sm font-semibold text-slate-700 mb-1">Blood Pressure (mmHg)</label>
@@ -553,16 +562,15 @@ function NurseDashboard() {
                     <input required type="number" step="0.1" placeholder="e.g. 70.5" value={vitals.weight} onChange={e => setVitals({...vitals, weight: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 transition" />
                   </div>
                 </div>
-                <div className="pt-6 border-t border-slate-100">
+                <div className="pt-6 border-t border-slate-100 mt-auto">
                   <button type="submit" className="w-full flex items-center justify-center px-8 py-4 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition shadow-lg shadow-blue-200">
                     <Save className="h-5 w-5 mr-2" /> Save Vitals & Send to Doctor
                   </button>
                 </div>
               </form>
-            </div>
-          )}
+            )}
+          </div>
         </div>
-      </div>
       ) : (
         <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm max-w-2xl">
           <h2 className="text-xl font-bold text-slate-900 mb-6 flex items-center border-b pb-4"><Shield className="mr-3 h-6 w-6 text-emerald-600"/> Record Immunization</h2>
