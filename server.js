@@ -171,7 +171,7 @@ app.post('/api/queue', authenticate, authorize(['receptionist', 'nurse']), async
 app.get('/api/queue/active', authenticate, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT q.id, q.status, q.check_in_time, p.full_name as patient_name, p.patient_type, d.name as doctor_name 
+      SELECT q.id, q.patient_id, q.status, q.check_in_time, p.full_name as patient_name, p.patient_type, d.name as doctor_name 
       FROM patient_queue q 
       JOIN patients p ON q.patient_id = p.id 
       LEFT JOIN users d ON q.assigned_doctor_id = d.id 
@@ -350,6 +350,17 @@ app.post('/api/inventory', authenticate, authorize(['pharmacist', 'admin']), asy
 });
 
 // --- 8. BILLING ---
+app.get('/api/billing/unpaid', authenticate, authorize(['receptionist', 'admin']), async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT b.*, p.full_name as patient_name, p.university_id 
+      FROM billing_invoices b JOIN patients p ON b.patient_id = p.id 
+      WHERE b.status = 'unpaid' ORDER BY b.created_at ASC
+    `);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/billing', authenticate, authorize(['receptionist', 'pharmacist', 'admin']), async (req, res) => {
   const { patient_id, total_amount, purpose } = req.body;
   try {
