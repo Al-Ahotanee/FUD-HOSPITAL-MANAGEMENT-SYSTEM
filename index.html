@@ -3,19 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FUD HIMS — Federal University Dutse Health Centre</title>
-    <meta name="description" content="Hospital Information Management System for Federal University Dutse Health Centre." />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <title>FUD Health Centre Management System</title>
+    <!-- Tailwind via CDN to ensure instant styling in dev/production fallback -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-      *, *::before, *::after { box-sizing: border-box; }
-      html, body { margin: 0; padding: 0; height: 100%; }
-      body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #020817; color: #f8fafc; }
-      #root { height: 100%; }
+      body { font-family: 'Inter', sans-serif; }
     </style>
   </head>
-  <body>
+  <body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
     <script type="module" src="/index.jsx"></script>
   </body>
