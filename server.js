@@ -82,6 +82,23 @@ initializeSystem();
 // ================= API ROUTES =================
 
 // --- 1. AUTHENTICATION ---
+app.post('/api/auth/register', async (req, res) => {
+  const { name, email, password } = req.body;
+  try {
+    const salt = await bcrypt.genSalt(10);
+    const hash = await bcrypt.hash(password, salt);
+    // Public registrations are defaulted to 'patient'
+    await pool.query(
+      "INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, 'patient')",
+      [name, email, hash]
+    );
+    res.status(201).json({ message: 'Registration successful! You can now log in.' });
+  } catch (err) { 
+    if(err.code === '23505') return res.status(400).json({ error: 'Email already exists.' });
+    res.status(500).json({ error: err.message }); 
+  }
+});
+
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   try {
