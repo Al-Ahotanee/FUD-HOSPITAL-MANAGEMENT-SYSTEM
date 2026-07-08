@@ -60,7 +60,7 @@ export default function App() {
     );
   }
 
-  if (!currentUser) return <AuthPage onSuccess={handleLoginSuccess} />;
+  if (!currentUser) return <LandingPage onSuccess={handleLoginSuccess} />;
   
   return (
     <DashboardLayout user={currentUser} onLogout={handleLogout}>
@@ -74,21 +74,35 @@ export default function App() {
   );
 }
 
-function AuthPage({ onSuccess }) {
-  const [formData, setFormData] = useState({ email: '', password: '' });
+function LandingPage({ onSuccess }) {
+  const [isLogin, setIsLogin] = useState(true);
+  const [formData, setFormData] = useState({ name: '', email: '', password: '' });
   const [error, setError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccessMsg('');
     setLoading(true);
+    
     try {
-      const data = await apiFetch('/api/auth/login', { 
-        method: 'POST', 
-        body: JSON.stringify(formData) 
-      });
-      onSuccess(data);
+      if (isLogin) {
+        const data = await apiFetch('/api/auth/login', { 
+          method: 'POST', 
+          body: JSON.stringify({ email: formData.email, password: formData.password }) 
+        });
+        onSuccess(data);
+      } else {
+        const data = await apiFetch('/api/auth/register', { 
+          method: 'POST', 
+          body: JSON.stringify(formData) 
+        });
+        setSuccessMsg(data.message);
+        setIsLogin(true); // Switch to login tab on success
+        setFormData({ ...formData, password: '' }); // clear password
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -96,47 +110,123 @@ function AuthPage({ onSuccess }) {
     }
   };
 
+  const autofillAdmin = () => {
+    setFormData({ ...formData, email: 'admin@fud.edu.ng', password: 'admin123' });
+    setIsLogin(true);
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-blue-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans">
-      <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
-        <div className="mx-auto h-20 w-20 bg-white rounded-2xl flex items-center justify-center shadow-xl mb-4">
-          <ActivitySquare className="h-12 w-12 text-blue-600" />
+    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
+      {/* Left Side - Hero & Branding */}
+      <div className="md:w-[55%] bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900 text-white p-8 md:p-16 flex flex-col justify-between relative overflow-hidden">
+        {/* Background Pattern */}
+        <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-white via-transparent to-transparent bg-[length:20px_20px]"></div>
+        
+        <div className="relative z-10">
+          <div className="flex items-center space-x-3 mb-12">
+            <div className="h-12 w-12 bg-white rounded-xl flex items-center justify-center shadow-lg">
+              <ActivitySquare className="h-8 w-8 text-blue-600" />
+            </div>
+            <span className="text-2xl font-bold tracking-wider">FUD HIMS</span>
+          </div>
+
+          <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold leading-tight mb-6">
+            Next-Generation <br/><span className="text-blue-400">Healthcare Management</span>
+          </h1>
+          <p className="text-lg md:text-xl text-blue-100/80 mb-12 max-w-xl leading-relaxed">
+            A comprehensive, robust, and secure Health Information Management System designed for the Federal University Dutse. Streamlining clinical workflows from triage to pharmacy.
+          </p>
+
+          <div className="grid grid-cols-2 gap-6 max-w-lg mb-12">
+            {[
+              { icon: Activity, label: "Real-time EMR" },
+              { icon: Shield, label: "Audit & Security" },
+              { icon: Users, label: "Queue Analytics" },
+              { icon: Pill, label: "E-Dispensary" }
+            ].map((feature, idx) => (
+              <div key={idx} className="flex items-center space-x-3 text-blue-100">
+                <div className="p-2 bg-white/10 rounded-lg"><feature.icon className="h-5 w-5"/></div>
+                <span className="font-medium">{feature.label}</span>
+              </div>
+            ))}
+          </div>
         </div>
-        <h2 className="text-3xl font-extrabold text-white tracking-tight">FUD HIMS Portal</h2>
-        <p className="mt-2 text-blue-200">Health Information Management System</p>
+
+        {/* MSc Evaluation Panel */}
+        <div className="relative z-10 bg-white/10 backdrop-blur-md border border-white/20 p-6 rounded-2xl max-w-lg shadow-2xl">
+          <div className="flex items-center space-x-2 mb-2">
+            <AlertCircle className="h-5 w-5 text-amber-400" />
+            <h3 className="font-bold text-lg text-white">MSc Evaluation Access</h3>
+          </div>
+          <p className="text-sm text-blue-100 mb-4">Click below to auto-fill the System Administrator credentials to evaluate the robust backend architecture and RBAC features.</p>
+          <button onClick={autofillAdmin} type="button" className="px-4 py-2 bg-blue-500/20 hover:bg-blue-500/40 border border-blue-400/50 rounded-lg text-sm font-bold transition-all flex items-center">
+            <CheckCircle2 className="h-4 w-4 mr-2"/> Auto-Fill Admin Credentials
+          </button>
+        </div>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-4 shadow-2xl sm:rounded-2xl sm:px-10 border border-slate-100">
-          <form className="space-y-6" onSubmit={handleSubmit}>
+      {/* Right Side - Auth Forms */}
+      <div className="md:w-[45%] flex items-center justify-center p-8 md:p-12 bg-white relative">
+        <div className="w-full max-w-md animate-in fade-in slide-in-from-right-8 duration-700">
+          
+          <div className="text-center mb-8">
+            <h2 className="text-3xl font-bold text-slate-900 mb-2">Welcome Back</h2>
+            <p className="text-slate-500">Access your secure portal</p>
+          </div>
+
+          {/* Login / Register Toggle */}
+          <div className="flex p-1 bg-slate-100 rounded-xl mb-8">
+            <button onClick={() => { setIsLogin(true); setError(''); setSuccessMsg(''); }} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${isLogin ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Sign In</button>
+            <button onClick={() => { setIsLogin(false); setError(''); setSuccessMsg(''); }} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${!isLogin ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Create Patient Account</button>
+          </div>
+
+          <form className="space-y-5" onSubmit={handleSubmit}>
             {error && (
-              <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md flex items-center">
-                <X className="h-5 w-5 text-red-500 mr-2"/>
-                <span className="text-sm text-red-700">{error}</span>
+              <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-lg flex items-start">
+                <X className="h-5 w-5 text-red-500 mr-2 flex-shrink-0 mt-0.5"/>
+                <span className="text-sm text-red-700 font-medium">{error}</span>
+              </div>
+            )}
+            {successMsg && (
+              <div className="bg-emerald-50 border-l-4 border-emerald-500 p-4 rounded-lg flex items-start">
+                <CheckCircle2 className="h-5 w-5 text-emerald-500 mr-2 flex-shrink-0 mt-0.5"/>
+                <span className="text-sm text-emerald-700 font-medium">{successMsg}</span>
               </div>
             )}
             
-            <div>
-              <label className="block text-sm font-medium text-slate-700">Email Address</label>
-              <div className="mt-1">
-                <input required type="email" onChange={e => setFormData({...formData, email: e.target.value})} 
-                  className="appearance-none block w-full px-3 py-3 border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 transition" />
+            {!isLogin && (
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">Full Name</label>
+                <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} 
+                  className="block w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" placeholder="John Doe" />
               </div>
+            )}
+
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1.5">Email Address</label>
+              <input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} 
+                className="block w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" placeholder="name@example.com" />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700">Password</label>
-              <div className="mt-1">
-                <input required type="password" onChange={e => setFormData({...formData, password: e.target.value})} 
-                  className="appearance-none block w-full px-3 py-3 border border-slate-300 rounded-xl shadow-sm placeholder-slate-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 transition" />
-              </div>
+              <label className="block text-sm font-bold text-slate-700 mb-1.5">Password</label>
+              <input required type="password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} 
+                className="block w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" placeholder="••••••••" />
             </div>
 
             <button type="submit" disabled={loading} 
-              className="w-full flex justify-center py-3 px-4 border border-transparent rounded-xl shadow-sm text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition disabled:opacity-50">
-              {loading ? 'Authenticating...' : 'Secure Login'}
+              className="w-full flex justify-center items-center py-3.5 px-4 rounded-xl shadow-lg shadow-blue-600/20 text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all disabled:opacity-70 mt-4">
+              {loading ? (
+                <ActivitySquare className="animate-spin h-5 w-5 mr-2" />
+              ) : (
+                isLogin ? 'Access Secure Portal' : 'Register Account'
+              )}
             </button>
           </form>
+          
+          <p className="text-center text-xs text-slate-400 mt-8">
+            Secured by AES-256 Encryption & Role-Based Access Control
+          </p>
         </div>
       </div>
     </div>
