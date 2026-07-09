@@ -703,9 +703,11 @@ function AuthPage({ initialMode, onSuccess, onBackHome }) {
           <div className="mt-6 bg-white/60 border border-slate-200 border-dashed p-5 rounded-2xl">
             <div className="flex items-center space-x-2 mb-2">
               <AlertCircle className="h-4 w-4 text-amber-500" />
-              <h3 className="font-bold text-sm text-slate-800">MFUD FCIT ASSIGNMENT</h3>
+              <h3 className="font-bold text-sm text-slate-800">Bsc Assignemnt</h3>
             </div>
+            <p className="text-xs text-slate-500 mb-3">Login with credentials to evaluate the full RBAC architecture.</p>
            
+          </div>
 
           <p className="text-center text-xs text-slate-400 mt-8">
             Secured by AES-256 Encryption & Role-Based Access Control
