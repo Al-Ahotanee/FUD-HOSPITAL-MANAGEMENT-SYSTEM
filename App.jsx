@@ -33,9 +33,53 @@ const fmtDateOnly = (d) => d ? new Date(d).toLocaleDateString() : '—';
 // ============================================================================
 // ROOT APP
 // ============================================================================
+// Sidebar navigation definitions per role. The `key` values map directly to
+// the internal `activeTab` state each dashboard already uses, so clicking a
+// sidebar item and clicking an in-page tab pill both drive the same state.
+const NAV_CONFIG = {
+  admin: [
+    { key: 'overview', label: 'Overview', icon: BarChart3 },
+    { key: 'staff', label: 'Staff Directory', icon: Users },
+    { key: 'audit', label: 'Audit Logs', icon: FileArchive }
+  ],
+  receptionist: [
+    { key: 'register', label: 'Patient Registration', icon: UserPlus },
+    { key: 'checkin', label: 'Check-In', icon: Clock },
+    { key: 'billing', label: 'Billing & Invoices', icon: CreditCard }
+  ],
+  nurse: [
+    { key: 'triage', label: 'Triage Queue', icon: Clock },
+    { key: 'immunization', label: 'Immunizations', icon: Shield }
+  ],
+  doctor: [
+    { key: 'workspace', label: 'EMR Workspace', icon: Stethoscope }
+  ],
+  lab_tech: [
+    { key: 'lab', label: 'Lab Requests', icon: TestTube }
+  ],
+  pharmacist: [
+    { key: 'queue', label: 'E-Dispensary', icon: Pill },
+    { key: 'inventory', label: 'Inventory Control', icon: BarChart3 }
+  ],
+  patient: [
+    { key: 'notice', label: 'My Account', icon: Activity }
+  ]
+};
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [authView, setAuthView] = useState('landing'); // 'landing' | 'login' | 'signup'
+  const [navView, setNavView] = useState(() => {
+    try {
+      const storedUser = localStorage.getItem('user');
+      if (storedUser) {
+        const role = JSON.parse(storedUser).role;
+        return NAV_CONFIG[role]?.[0]?.key || null;
+      }
+    } catch (e) { /* ignore malformed storage */ }
+    return null;
+  });
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -48,12 +92,15 @@ export default function App() {
     localStorage.setItem('token', data.token);
     localStorage.setItem('user', JSON.stringify(data.user));
     setCurrentUser(data.user);
+    setNavView(NAV_CONFIG[data.user.role]?.[0]?.key || null);
+    setAuthView('landing');
   };
 
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     setCurrentUser(null);
+    setAuthView('landing');
   };
 
   if (isInitializing) {
@@ -64,16 +111,29 @@ export default function App() {
     );
   }
 
-  if (!currentUser) return <LandingPage onSuccess={handleLoginSuccess} />;
+  if (!currentUser) {
+    if (authView === 'landing') {
+      return <MarketingLandingPage onLogin={() => setAuthView('login')} onSignup={() => setAuthView('signup')} />;
+    }
+    return (
+      <AuthPage
+        initialMode={authView === 'signup' ? 'signup' : 'login'}
+        onSuccess={handleLoginSuccess}
+        onBackHome={() => setAuthView('landing')}
+      />
+    );
+  }
+
+  const navItems = NAV_CONFIG[currentUser.role] || [];
 
   return (
-    <DashboardLayout user={currentUser} onLogout={handleLogout}>
-      {currentUser.role === 'admin' && <AdminDashboard />}
-      {currentUser.role === 'receptionist' && <ReceptionistDashboard currentUser={currentUser} />}
-      {currentUser.role === 'nurse' && <NurseDashboard />}
+    <DashboardLayout user={currentUser} onLogout={handleLogout} navItems={navItems} activeNav={navView} onNavClick={setNavView}>
+      {currentUser.role === 'admin' && <AdminDashboard activeTab={navView} setActiveTab={setNavView} />}
+      {currentUser.role === 'receptionist' && <ReceptionistDashboard activeTab={navView} setActiveTab={setNavView} />}
+      {currentUser.role === 'nurse' && <NurseDashboard activeTab={navView} setActiveTab={setNavView} />}
       {currentUser.role === 'doctor' && <DoctorDashboard />}
       {currentUser.role === 'lab_tech' && <LabDashboard />}
-      {currentUser.role === 'pharmacist' && <PharmacistDashboard />}
+      {currentUser.role === 'pharmacist' && <PharmacistDashboard activeTab={navView} setActiveTab={setNavView} />}
       {currentUser.role === 'patient' && <PatientNotice />}
     </DashboardLayout>
   );
@@ -92,8 +152,255 @@ function PatientNotice() {
 // ============================================================================
 // LANDING / AUTH
 // ============================================================================
-function LandingPage({ onSuccess }) {
-  const [isLogin, setIsLogin] = useState(true);
+function MarketingLandingPage({ onLogin, onSignup }) {
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 10);
+    window.addEventListener('scroll', onScroll);
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const roles = [
+    { icon: Shield, label: 'Admin' },
+    { icon: UserPlus, label: 'Receptionist' },
+    { icon: Syringe, label: 'Nurse' },
+    { icon: Stethoscope, label: 'Doctor' },
+    { icon: TestTube, label: 'Lab Tech' },
+    { icon: Pill, label: 'Pharmacist' }
+  ];
+
+  const features = [
+    { icon: History, title: 'Unified Electronic Medical Records', desc: 'A single, chronological patient timeline spanning vitals, consultations, lab results, prescriptions, certificates and immunizations.' },
+    { icon: Shield, title: 'Role-Based Access Control', desc: 'Six distinct portals with scoped permissions, so every staff member sees exactly what their role requires — nothing more.' },
+    { icon: Clock, title: 'Live Queue & Triage Routing', desc: 'Patients move automatically from check-in to triage to the doctor\'s desk as vitals are logged, in real time.' },
+    { icon: Pill, title: 'E-Prescription & Inventory Sync', desc: 'Prescriptions are dispensed directly against pharmacy stock, with automatic inventory deduction and low-stock alerts.' },
+    { icon: CreditCard, title: 'Automated Billing', desc: 'Consultations, lab tests and dispensed medication generate itemized invoices for Reception automatically — no manual entry.' },
+    { icon: FileArchive, title: 'Immutable Audit Trail', desc: 'Every create, update and delete across the system is permanently logged and attributable to a specific staff account.' }
+  ];
+
+  const steps = [
+    { step: '01', title: 'Registration', desc: 'Reception captures university ID, demographics and clinical baseline data.' },
+    { step: '02', title: 'Triage', desc: 'Nurses log vitals; the patient is queued to the assigned doctor automatically.' },
+    { step: '03', title: 'Consultation', desc: 'Doctors record diagnoses, request labs, and issue e-prescriptions from one workspace.' },
+    { step: '04', title: 'Lab & Pharmacy', desc: 'Results and dispensing update the EMR and inventory instantly.' },
+    { step: '05', title: 'Billing', desc: 'Invoices are raised automatically and settled at Reception.' }
+  ];
+
+  return (
+    <div className="min-h-screen bg-white font-sans text-slate-900">
+      {/* HEADER */}
+      <header className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'bg-white/95 backdrop-blur-md shadow-sm border-b border-slate-100' : 'bg-transparent'}`}>
+        <div className="max-w-7xl mx-auto px-6 md:px-8 h-20 flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="h-10 w-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-600/20">
+              <ActivitySquare className="h-6 w-6 text-white" />
+            </div>
+            <div>
+              <div className="text-lg font-extrabold tracking-tight leading-none text-slate-900">FUD HIMS</div>
+              <div className="text-[11px] font-medium text-slate-400 leading-none mt-0.5">Federal University Dutse</div>
+            </div>
+          </div>
+
+          <nav className="hidden md:flex items-center space-x-10 text-sm font-semibold text-slate-600">
+            <a href="#features" className="hover:text-blue-600 transition-colors">Features</a>
+            <a href="#portals" className="hover:text-blue-600 transition-colors">Portals</a>
+            <a href="#workflow" className="hover:text-blue-600 transition-colors">How It Works</a>
+            <a href="#contact" className="hover:text-blue-600 transition-colors">Contact</a>
+          </nav>
+
+          <div className="flex items-center space-x-3">
+            <button onClick={onLogin} className="px-5 py-2.5 text-sm font-bold text-slate-700 hover:text-blue-600 transition-colors">Sign In</button>
+            <button onClick={onSignup} className="px-5 py-2.5 text-sm font-bold text-white bg-blue-600 rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20">Get Started</button>
+          </div>
+        </div>
+      </header>
+
+      {/* HERO */}
+      <section className="relative pt-40 pb-28 px-6 md:px-8 overflow-hidden bg-gradient-to-b from-slate-50 to-white">
+        <div className="absolute -top-24 -right-24 h-96 w-96 bg-blue-100 rounded-full blur-3xl opacity-60"></div>
+        <div className="absolute top-40 -left-24 h-72 w-72 bg-indigo-100 rounded-full blur-3xl opacity-50"></div>
+
+        <div className="relative max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+          <div>
+            <div className="inline-flex items-center px-4 py-1.5 bg-blue-50 border border-blue-100 rounded-full text-xs font-bold text-blue-700 mb-6 tracking-wide uppercase">
+              Federal University Dutse Health Centre
+            </div>
+            <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold leading-[1.1] tracking-tight text-slate-900 mb-6">
+              Enterprise Healthcare Management, Built for Campus Life
+            </h1>
+            <p className="text-lg text-slate-500 leading-relaxed mb-10 max-w-xl">
+              A single, secure platform connecting Reception, Nursing, Doctors, Laboratory, Pharmacy and Administration — from patient check-in to billing, without the paperwork.
+            </p>
+            <div className="flex flex-wrap items-center gap-4">
+              <button onClick={onLogin} className="px-8 py-4 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 flex items-center">
+                Access Your Portal
+              </button>
+              <button onClick={onSignup} className="px-8 py-4 bg-white text-slate-700 rounded-xl font-bold border-2 border-slate-200 hover:border-slate-300 transition-all">
+                Create Patient Account
+              </button>
+            </div>
+          </div>
+
+          {/* Stylised product preview panel */}
+          <div className="relative">
+            <div className="absolute -inset-4 bg-gradient-to-tr from-blue-200/40 to-indigo-200/40 rounded-3xl blur-2xl"></div>
+            <div className="relative bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden">
+              <div className="h-11 bg-slate-50 border-b border-slate-100 flex items-center px-4 space-x-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-red-300"></span>
+                <span className="h-2.5 w-2.5 rounded-full bg-amber-300"></span>
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-300"></span>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="grid grid-cols-3 gap-3">
+                  {[{l:'Patients',v:'1,204',c:'text-blue-600',b:'bg-blue-50'},{l:'Consults Today',v:'38',c:'text-indigo-600',b:'bg-indigo-50'},{l:'Pending Labs',v:'6',c:'text-amber-600',b:'bg-amber-50'}].map((s,i)=>(
+                    <div key={i} className={`rounded-xl p-4 ${s.b}`}>
+                      <div className={`text-xl font-extrabold ${s.c}`}>{s.v}</div>
+                      <div className="text-[11px] font-semibold text-slate-500 mt-0.5">{s.l}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="rounded-xl border border-slate-100 p-4">
+                  <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Live Queue</div>
+                  <div className="space-y-2.5">
+                    {[{n:'A. Mohammed',s:'Waiting Doctor',c:'bg-blue-100 text-blue-700'},{n:'F. Bello',s:'In Triage',c:'bg-amber-100 text-amber-700'},{n:'S. Yusuf',s:'Pharmacy',c:'bg-emerald-100 text-emerald-700'}].map((q,i)=>(
+                      <div key={i} className="flex items-center justify-between">
+                        <span className="text-sm font-semibold text-slate-700">{q.n}</span>
+                        <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${q.c}`}>{q.s}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between rounded-xl bg-slate-900 p-4 text-white">
+                  <div className="flex items-center space-x-2">
+                    <FileArchive className="h-4 w-4 text-blue-400" />
+                    <span className="text-xs font-semibold">Audit trail active</span>
+                  </div>
+                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ROLE STRIP */}
+      <section id="portals" className="py-16 border-y border-slate-100 bg-slate-50/50">
+        <div className="max-w-7xl mx-auto px-6 md:px-8">
+          <p className="text-center text-sm font-bold text-slate-400 uppercase tracking-widest mb-10">One System, Six Dedicated Portals</p>
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-6">
+            {roles.map((r, i) => (
+              <div key={i} className="flex flex-col items-center text-center group">
+                <div className="h-16 w-16 rounded-2xl bg-white border border-slate-200 shadow-sm flex items-center justify-center mb-3 group-hover:border-blue-300 group-hover:shadow-md transition-all">
+                  <r.icon className="h-7 w-7 text-slate-500 group-hover:text-blue-600 transition-colors" />
+                </div>
+                <span className="text-sm font-bold text-slate-700">{r.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* FEATURES */}
+      <section id="features" className="py-28 px-6 md:px-8">
+        <div className="max-w-7xl mx-auto">
+          <div className="max-w-2xl mx-auto text-center mb-16">
+            <h2 className="text-3xl md:text-4xl font-extrabold text-slate-900 mb-4">Everything the Health Centre Needs, Deeply Connected</h2>
+            <p className="text-slate-500 text-lg">Not a collection of separate forms — a single record that flows from department to department automatically.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {features.map((f, i) => (
+              <div key={i} className="p-8 rounded-2xl border border-slate-200 hover:border-blue-200 hover:shadow-xl hover:shadow-slate-100 transition-all duration-300 bg-white">
+                <div className="h-12 w-12 rounded-xl bg-blue-50 flex items-center justify-center mb-5">
+                  <f.icon className="h-6 w-6 text-blue-600" />
+                </div>
+                <h3 className="font-bold text-lg text-slate-900 mb-2">{f.title}</h3>
+                <p className="text-sm text-slate-500 leading-relaxed">{f.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* WORKFLOW / HOW IT WORKS */}
+      <section id="workflow" className="py-28 px-6 md:px-8 bg-slate-900 text-white relative overflow-hidden">
+        <div className="absolute top-0 right-0 h-96 w-96 bg-blue-600/10 rounded-full blur-3xl"></div>
+        <div className="max-w-7xl mx-auto relative">
+          <div className="max-w-2xl mb-16">
+            <h2 className="text-3xl md:text-4xl font-extrabold mb-4">A Patient Journey, Fully Tracked</h2>
+            <p className="text-slate-400 text-lg">From the front desk to the pharmacy counter, every step updates the same record in real time.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-8">
+            {steps.map((s, i) => (
+              <div key={i} className="relative">
+                <div className="text-5xl font-extrabold text-white/10 mb-4">{s.step}</div>
+                <h3 className="font-bold text-lg mb-2">{s.title}</h3>
+                <p className="text-sm text-slate-400 leading-relaxed">{s.desc}</p>
+                {i < steps.length - 1 && <div className="hidden md:block absolute top-6 -right-4 w-8 h-px bg-white/20"></div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* CTA BANNER */}
+      <section className="py-24 px-6 md:px-8">
+        <div className="max-w-5xl mx-auto rounded-3xl bg-gradient-to-br from-blue-600 to-indigo-700 px-10 py-16 text-center shadow-2xl shadow-blue-600/20 relative overflow-hidden">
+          <div className="absolute -bottom-16 -right-16 h-64 w-64 bg-white/10 rounded-full blur-2xl"></div>
+          <h2 className="text-3xl md:text-4xl font-extrabold text-white mb-4 relative">Ready to Modernize Campus Healthcare?</h2>
+          <p className="text-blue-100 text-lg mb-10 max-w-xl mx-auto relative">Sign in with your staff credentials, or register a patient portal account to get started.</p>
+          <div className="flex flex-wrap justify-center gap-4 relative">
+            <button onClick={onLogin} className="px-8 py-4 bg-white text-blue-700 rounded-xl font-bold hover:bg-blue-50 transition-all shadow-lg">Staff Sign In</button>
+            <button onClick={onSignup} className="px-8 py-4 bg-blue-500/30 text-white border-2 border-white/40 rounded-xl font-bold hover:bg-blue-500/50 transition-all">Create Patient Account</button>
+          </div>
+        </div>
+      </section>
+
+      {/* FOOTER */}
+      <footer id="contact" className="bg-slate-950 text-slate-400 pt-20 pb-10 px-6 md:px-8">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
+          <div className="md:col-span-2">
+            <div className="flex items-center space-x-3 mb-5">
+              <div className="h-9 w-9 bg-blue-600 rounded-lg flex items-center justify-center">
+                <ActivitySquare className="h-5 w-5 text-white" />
+              </div>
+              <span className="text-lg font-extrabold text-white">FUD HIMS</span>
+            </div>
+            <p className="text-sm leading-relaxed max-w-sm">
+              The Health Information Management System of the Federal University Dutse Health Centre — securing and streamlining clinical care for students, staff and dependents.
+            </p>
+          </div>
+          <div>
+            <h4 className="text-white font-bold text-sm uppercase tracking-wider mb-5">Quick Links</h4>
+            <ul className="space-y-3 text-sm">
+              <li><a href="#features" className="hover:text-white transition-colors">Features</a></li>
+              <li><a href="#portals" className="hover:text-white transition-colors">Staff Portals</a></li>
+              <li><a href="#workflow" className="hover:text-white transition-colors">How It Works</a></li>
+            </ul>
+          </div>
+          <div>
+            <h4 className="text-white font-bold text-sm uppercase tracking-wider mb-5">Health Centre</h4>
+            <ul className="space-y-3 text-sm">
+              <li>Federal University Dutse, Jigawa State, Nigeria</li>
+              <li>healthcentre@fud.edu.ng</li>
+              <li>Mon – Fri, 8:00am – 5:00pm</li>
+            </ul>
+          </div>
+        </div>
+        <div className="max-w-7xl mx-auto pt-8 border-t border-slate-800 flex flex-col md:flex-row justify-between items-center text-xs text-slate-500 gap-3">
+          <span>© {new Date().getFullYear()} Federal University Dutse Health Centre. All rights reserved.</span>
+          <span className="flex items-center"><Shield className="h-3.5 w-3.5 mr-1.5" /> Secured by Role-Based Access Control & Immutable Audit Logging</span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+// ============================================================================
+// DEDICATED AUTH PAGE (separate from the marketing site)
+// ============================================================================
+function AuthPage({ initialMode, onSuccess, onBackHome }) {
+  const [isLogin, setIsLogin] = useState(initialMode !== 'signup');
   const [formData, setFormData] = useState({ name: '', email: '', password: '' });
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -133,110 +440,84 @@ function LandingPage({ onSuccess }) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row font-sans">
-      {/* Left Side - Hero & Branding */}
-      <div className="md:w-[55%] bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900 text-white p-8 md:p-16 flex flex-col justify-between relative overflow-hidden">
-        <div className="absolute inset-0 opacity-10 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-white via-transparent to-transparent bg-[length:20px_20px]"></div>
-
-        <div className="relative z-10">
-          <div className="flex items-center space-x-3 mb-12">
-            <div className="h-12 w-12 bg-white rounded-xl flex items-center justify-center shadow-lg">
-              <ActivitySquare className="h-8 w-8 text-blue-600" />
-            </div>
-            <span className="text-2xl font-bold tracking-wider">FUD HIMS</span>
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+      <div className="h-20 flex items-center px-6 md:px-10">
+        <button onClick={onBackHome} className="flex items-center space-x-3 group">
+          <div className="h-10 w-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-600/20">
+            <ActivitySquare className="h-6 w-6 text-white" />
           </div>
-
-          <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold leading-tight mb-6">
-            Next-Generation <br/><span className="text-blue-400">Healthcare Management</span>
-          </h1>
-          <p className="text-lg md:text-xl text-blue-100/80 mb-12 max-w-xl leading-relaxed">
-            A comprehensive, robust, and secure Health Information Management System designed for the Federal University Dutse. Streamlining clinical workflows from triage to pharmacy.
-          </p>
-
-          <div className="grid grid-cols-2 gap-6 max-w-lg mb-12">
-            {[
-              { icon: Activity, label: "Real-time EMR" },
-              { icon: Shield, label: "Audit & Security" },
-              { icon: Users, label: "Queue Analytics" },
-              { icon: Pill, label: "E-Dispensary" }
-            ].map((feature, idx) => (
-              <div key={idx} className="flex items-center space-x-3 text-blue-100">
-                <div className="p-2 bg-white/10 rounded-lg"><feature.icon className="h-5 w-5"/></div>
-                <span className="font-medium">{feature.label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="relative z-10 bg-white/10 backdrop-blur-md border border-white/20 p-6 rounded-2xl max-w-lg shadow-2xl">
-          <div className="flex items-center space-x-2 mb-2">
-            <AlertCircle className="h-5 w-5 text-amber-400" />
-            <h3 className="font-bold text-lg text-white">MSc Evaluation Access</h3>
-          </div>
-          <p className="text-sm text-blue-100 mb-4">Click below to auto-fill the System Administrator credentials to evaluate the robust backend architecture and RBAC features.</p>
-          <button onClick={autofillAdmin} type="button" className="px-4 py-2 bg-blue-500/20 hover:bg-blue-500/40 border border-blue-400/50 rounded-lg text-sm font-bold transition-all flex items-center">
-            <CheckCircle2 className="h-4 w-4 mr-2"/> Auto-Fill Admin Credentials
-          </button>
-        </div>
+          <span className="text-lg font-extrabold text-slate-900 group-hover:text-blue-600 transition-colors">FUD HIMS</span>
+        </button>
       </div>
 
-      {/* Right Side - Auth Forms */}
-      <div className="md:w-[45%] flex items-center justify-center p-8 md:p-12 bg-white relative">
-        <div className="w-full max-w-md animate-in fade-in slide-in-from-right-8 duration-700">
-
-          <div className="text-center mb-8">
-            <h2 className="text-3xl font-bold text-slate-900 mb-2">Welcome Back</h2>
-            <p className="text-slate-500">Access your secure portal</p>
-          </div>
-
-          <div className="flex p-1 bg-slate-100 rounded-xl mb-8">
-            <button onClick={() => { setIsLogin(true); setError(''); setSuccessMsg(''); }} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${isLogin ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Sign In</button>
-            <button onClick={() => { setIsLogin(false); setError(''); setSuccessMsg(''); }} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${!isLogin ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Create Patient Account</button>
-          </div>
-
-          <form className="space-y-5" onSubmit={handleSubmit}>
-            {error && (
-              <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-lg flex items-start">
-                <X className="h-5 w-5 text-red-500 mr-2 flex-shrink-0 mt-0.5"/>
-                <span className="text-sm text-red-700 font-medium">{error}</span>
-              </div>
-            )}
-            {successMsg && (
-              <div className="bg-emerald-50 border-l-4 border-emerald-500 p-4 rounded-lg flex items-start">
-                <CheckCircle2 className="h-5 w-5 text-emerald-500 mr-2 flex-shrink-0 mt-0.5"/>
-                <span className="text-sm text-emerald-700 font-medium">{successMsg}</span>
-              </div>
-            )}
-
-            {!isLogin && (
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1.5">Full Name</label>
-                <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})}
-                  className="block w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" placeholder="John Doe" />
-              </div>
-            )}
-
-            <div>
-              <label className="block text-sm font-bold text-slate-700 mb-1.5">Email Address</label>
-              <input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})}
-                className="block w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" placeholder="name@example.com" />
+      <div className="flex-1 flex items-center justify-center px-6 pb-16">
+        <div className="w-full max-w-md">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-100 p-8 md:p-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="text-center mb-8">
+              <h2 className="text-2xl font-extrabold text-slate-900 mb-2">{isLogin ? 'Welcome Back' : 'Create Patient Account'}</h2>
+              <p className="text-slate-500 text-sm">{isLogin ? 'Sign in to access your secure portal' : 'Register for a FUD HIMS patient account'}</p>
             </div>
 
-            <div>
-              <label className="block text-sm font-bold text-slate-700 mb-1.5">Password</label>
-              <input required type="password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})}
-                className="block w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" placeholder="••••••••" />
+            <div className="flex p-1 bg-slate-100 rounded-xl mb-8">
+              <button onClick={() => { setIsLogin(true); setError(''); setSuccessMsg(''); }} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${isLogin ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Sign In</button>
+              <button onClick={() => { setIsLogin(false); setError(''); setSuccessMsg(''); }} className={`flex-1 py-2.5 text-sm font-bold rounded-lg transition-all ${!isLogin ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>Create Account</button>
             </div>
 
-            <button type="submit" disabled={loading}
-              className="w-full flex justify-center items-center py-3.5 px-4 rounded-xl shadow-lg shadow-blue-600/20 text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all disabled:opacity-70 mt-4">
-              {loading ? (
-                <ActivitySquare className="animate-spin h-5 w-5 mr-2" />
-              ) : (
-                isLogin ? 'Access Secure Portal' : 'Register Account'
+            <form className="space-y-5" onSubmit={handleSubmit}>
+              {error && (
+                <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-lg flex items-start">
+                  <X className="h-5 w-5 text-red-500 mr-2 flex-shrink-0 mt-0.5"/>
+                  <span className="text-sm text-red-700 font-medium">{error}</span>
+                </div>
               )}
+              {successMsg && (
+                <div className="bg-emerald-50 border-l-4 border-emerald-500 p-4 rounded-lg flex items-start">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-500 mr-2 flex-shrink-0 mt-0.5"/>
+                  <span className="text-sm text-emerald-700 font-medium">{successMsg}</span>
+                </div>
+              )}
+
+              {!isLogin && (
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1.5">Full Name</label>
+                  <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})}
+                    className="block w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" placeholder="John Doe" />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">Email Address</label>
+                <input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})}
+                  className="block w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" placeholder="name@example.com" />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1.5">Password</label>
+                <input required type="password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})}
+                  className="block w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" placeholder="••••••••" />
+              </div>
+
+              <button type="submit" disabled={loading}
+                className="w-full flex justify-center items-center py-3.5 px-4 rounded-xl shadow-lg shadow-blue-600/20 text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all disabled:opacity-70 mt-2">
+                {loading ? (
+                  <ActivitySquare className="animate-spin h-5 w-5 mr-2" />
+                ) : (
+                  isLogin ? 'Access Secure Portal' : 'Register Account'
+                )}
+              </button>
+            </form>
+          </div>
+
+          <div className="mt-6 bg-white/60 border border-slate-200 border-dashed p-5 rounded-2xl">
+            <div className="flex items-center space-x-2 mb-2">
+              <AlertCircle className="h-4 w-4 text-amber-500" />
+              <h3 className="font-bold text-sm text-slate-800">MSc Evaluation Access</h3>
+            </div>
+            <p className="text-xs text-slate-500 mb-3">Auto-fill the System Administrator credentials to evaluate the full RBAC architecture.</p>
+            <button onClick={autofillAdmin} type="button" className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-bold transition-all text-slate-700 flex items-center w-fit">
+              <CheckCircle2 className="h-3.5 w-3.5 mr-1.5"/> Auto-Fill Admin Credentials
             </button>
-          </form>
+          </div>
 
           <p className="text-center text-xs text-slate-400 mt-8">
             Secured by AES-256 Encryption & Role-Based Access Control
@@ -250,30 +531,30 @@ function LandingPage({ onSuccess }) {
 // ============================================================================
 // DASHBOARD SHELL
 // ============================================================================
-function DashboardLayout({ children, user, onLogout }) {
-  const getNavItems = () => {
-    const role = user?.role;
-    const items = [{ icon: Activity, label: 'Dashboard' }];
-    if (role === 'admin') items.push({ icon: Users, label: 'Staff Management' }, { icon: FileArchive, label: 'Audit Logs' });
-    if (role === 'receptionist') items.push({ icon: UserPlus, label: 'Patient Registration' }, { icon: Clock, label: 'Check-In' }, { icon: CreditCard, label: 'Billing & Invoices' });
-    if (role === 'nurse') items.push({ icon: Clock, label: 'Triage Queue' }, { icon: Shield, label: 'Immunizations' });
-    if (role === 'doctor') items.push({ icon: Stethoscope, label: 'EMR Workspace' }, { icon: FileText, label: 'Certificates' });
-    if (role === 'lab_tech') items.push({ icon: TestTube, label: 'Lab Requests' });
-    if (role === 'pharmacist') items.push({ icon: Pill, label: 'Dispensary' }, { icon: BarChart3, label: 'Inventory' });
+function DashboardLayout({ children, user, onLogout, navItems = [], activeNav, onNavClick }) {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const activeLabel = navItems.find(i => i.key === activeNav)?.label || 'Dashboard';
 
-    return items;
+  const handleNavClick = (key) => {
+    onNavClick?.(key);
+    setSidebarOpen(false);
   };
 
   return (
     <div className="flex h-screen bg-slate-50 font-sans overflow-hidden">
-      <aside className="w-72 bg-slate-900 text-slate-300 flex flex-col shadow-2xl z-20">
+      {/* Mobile backdrop */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 z-30 md:hidden" onClick={() => setSidebarOpen(false)}></div>
+      )}
+
+      <aside className={`fixed md:static inset-y-0 left-0 z-40 w-72 bg-slate-900 text-slate-300 flex flex-col shadow-2xl transform transition-transform duration-300 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <div className="h-20 flex items-center px-6 border-b border-slate-800 bg-slate-950/50">
           <ActivitySquare className="h-8 w-8 text-blue-500 mr-3" />
           <span className="text-xl font-bold text-white tracking-wide">FUD HIMS</span>
         </div>
 
         <div className="p-6 flex items-center space-x-4 border-b border-slate-800">
-          <div className="h-12 w-12 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold text-xl shadow-lg ring-2 ring-slate-800">
+          <div className="h-12 w-12 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold text-xl shadow-lg ring-2 ring-slate-800 flex-shrink-0">
             {user?.name?.charAt(0)}
           </div>
           <div className="overflow-hidden">
@@ -283,12 +564,16 @@ function DashboardLayout({ children, user, onLogout }) {
         </div>
 
         <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
-          {getNavItems().map((item, idx) => (
-            <button key={idx} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${idx === 0 ? 'bg-blue-600 text-white shadow-md shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}>
-              <item.icon className={`h-5 w-5 ${idx === 0 ? 'text-white' : 'text-slate-400'}`} />
-              <span className="font-medium">{item.label}</span>
-            </button>
-          ))}
+          {navItems.map((item) => {
+            const isActive = item.key === activeNav;
+            return (
+              <button key={item.key} onClick={() => handleNavClick(item.key)}
+                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${isActive ? 'bg-blue-600 text-white shadow-md shadow-blue-900/20' : 'hover:bg-slate-800 hover:text-white'}`}>
+                <item.icon className={`h-5 w-5 flex-shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                <span className="font-medium text-left">{item.label}</span>
+              </button>
+            );
+          })}
         </nav>
 
         <div className="p-4 border-t border-slate-800">
@@ -299,22 +584,27 @@ function DashboardLayout({ children, user, onLogout }) {
       </aside>
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <header className="h-20 bg-white border-b border-slate-200 flex items-center justify-between px-8 z-10 shadow-sm">
-          <div className="flex items-center text-slate-500">
-            <Menu className="h-6 w-6 cursor-pointer hover:text-slate-800 transition" />
-            <span className="ml-4 text-sm font-medium">Federal University Dutse Health Centre</span>
+        <header className="h-20 bg-white border-b border-slate-200 flex items-center justify-between px-5 md:px-8 z-10 shadow-sm">
+          <div className="flex items-center text-slate-500 min-w-0">
+            <button onClick={() => setSidebarOpen(true)} className="md:hidden mr-3 p-1.5 -ml-1.5 text-slate-500 hover:text-slate-800">
+              <Menu className="h-6 w-6" />
+            </button>
+            <div className="min-w-0">
+              <div className="text-xs text-slate-400 font-medium hidden sm:block">Federal University Dutse Health Centre</div>
+              <div className="text-base font-bold text-slate-800 truncate">{activeLabel}</div>
+            </div>
           </div>
-          <div className="flex items-center space-x-6">
-            <div className="relative">
+          <div className="flex items-center space-x-4 md:space-x-6">
+            <div className="relative hidden sm:block">
               <Search className="h-5 w-5 text-slate-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
-              <input type="text" placeholder="Search records..." className="pl-10 pr-4 py-2 bg-slate-100 border-transparent rounded-full text-sm focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all w-64" />
+              <input type="text" placeholder="Search records..." className="pl-10 pr-4 py-2 bg-slate-100 border-transparent rounded-full text-sm focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all w-48 md:w-64" />
             </div>
             <button className="relative p-2 text-slate-400 hover:text-blue-600 transition">
               <Bell className="h-6 w-6" />
             </button>
           </div>
         </header>
-        <div className="flex-1 overflow-y-auto p-8">
+        <div className="flex-1 overflow-y-auto p-5 md:p-8">
           {children}
         </div>
       </main>
@@ -325,12 +615,11 @@ function DashboardLayout({ children, user, onLogout }) {
 // ============================================================================
 // ADMIN DASHBOARD
 // ============================================================================
-function AdminDashboard() {
+function AdminDashboard({ activeTab: tab, setActiveTab: setTab }) {
   const [stats, setStats] = useState({ totalPatients: 0, consultationsToday: 0, pendingLabs: 0, lowStock: 0, revenue: 0, lowStockItems: [] });
   const [logs, setLogs] = useState([]);
   const [users, setUsers] = useState([]);
   const [staffForm, setStaffForm] = useState({ name: '', email: '', password: '', role: 'doctor' });
-  const [tab, setTab] = useState('overview');
 
   useEffect(() => { loadData(); }, []);
 
@@ -522,8 +811,7 @@ function AdminDashboard() {
 // ============================================================================
 // RECEPTIONIST DASHBOARD
 // ============================================================================
-function ReceptionistDashboard() {
-  const [activeTab, setActiveTab] = useState('register');
+function ReceptionistDashboard({ activeTab, setActiveTab }) {
   const emptyPatientForm = { university_id: '', patient_type: 'student', full_name: '', dob: '', gender: 'Male', blood_group: '', genotype: '', allergies: '', phone: '', address: '' };
   const [patientForm, setPatientForm] = useState(emptyPatientForm);
   const [lastRegistered, setLastRegistered] = useState(null);
@@ -834,8 +1122,7 @@ function ReceptionistDashboard() {
 // ============================================================================
 // NURSE DASHBOARD
 // ============================================================================
-function NurseDashboard() {
-  const [activeTab, setActiveTab] = useState('triage');
+function NurseDashboard({ activeTab, setActiveTab }) {
   const [queue, setQueue] = useState([]);
   const [activePatient, setActivePatient] = useState(null);
   const [vitals, setVitals] = useState({ blood_pressure: '', temperature: '', weight: '', heart_rate: '' });
@@ -1553,8 +1840,7 @@ function LabDashboard() {
 // ============================================================================
 // PHARMACIST DASHBOARD
 // ============================================================================
-function PharmacistDashboard() {
-  const [activeTab, setActiveTab] = useState('queue');
+function PharmacistDashboard({ activeTab, setActiveTab }) {
   const [queue, setQueue] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [invForm, setInvForm] = useState({ item_name: '', category: 'Drug', quantity: 0, unit_price: 0 });
