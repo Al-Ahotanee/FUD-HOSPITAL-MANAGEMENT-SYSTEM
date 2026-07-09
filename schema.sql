@@ -29,6 +29,10 @@ CREATE TABLE users (
   password      TEXT NOT NULL,
   role          VARCHAR(30) NOT NULL CHECK (role IN
                   ('admin','receptionist','nurse','doctor','lab_tech','pharmacist','patient')),
+                  -- NOTE: 'nurse' is retained only for backward compatibility with
+                  -- existing accounts. Triage/vitals/immunization duties were merged
+                  -- into the Receptionist role to streamline front-desk operations;
+                  -- new staff accounts should be created as 'receptionist'.
   is_active     BOOLEAN NOT NULL DEFAULT TRUE,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -158,16 +162,22 @@ CREATE TABLE prescription_items (
 -- 9. BILLING & INVOICING (linked to consultations / labs / prescriptions)
 -- ============================================================================
 CREATE TABLE billing_invoices (
-  id               SERIAL PRIMARY KEY,
-  patient_id       INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
-  generated_by     INTEGER REFERENCES users(id),
-  total_amount     NUMERIC(10,2) NOT NULL CHECK (total_amount >= 0),
-  purpose          VARCHAR(200) NOT NULL,
-  reference_type   VARCHAR(20) CHECK (reference_type IN ('consultation','lab_request','prescription','manual')),
-  reference_id     INTEGER,
-  status           VARCHAR(10) NOT NULL DEFAULT 'unpaid' CHECK (status IN ('unpaid','paid')),
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  paid_at          TIMESTAMPTZ
+  id                 SERIAL PRIMARY KEY,
+  patient_id         INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  generated_by       INTEGER REFERENCES users(id),
+  total_amount       NUMERIC(10,2) NOT NULL CHECK (total_amount >= 0),
+  purpose            VARCHAR(200) NOT NULL,
+  reference_type     VARCHAR(20) CHECK (reference_type IN ('consultation','lab_request','prescription','manual')),
+  reference_id       INTEGER,
+  -- unpaid -> processing (patient submits a mock online payment) -> paid (Reception confirms)
+  -- Reception/Admin may also confirm directly from 'unpaid' for cash/in-person payments.
+  status             VARCHAR(15) NOT NULL DEFAULT 'unpaid' CHECK (status IN ('unpaid','processing','paid')),
+  payment_method     VARCHAR(20),                 -- e.g. 'mock_card', 'cash'
+  payment_reference  VARCHAR(60),                 -- mock transaction reference shown to Reception for reconciliation
+  initiated_at       TIMESTAMPTZ,                 -- when the patient submitted the mock payment
+  confirmed_by       INTEGER REFERENCES users(id),-- Reception/Admin staff who confirmed the payment
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  paid_at            TIMESTAMPTZ
 );
 CREATE INDEX idx_billing_patient ON billing_invoices (patient_id);
 CREATE INDEX idx_billing_status ON billing_invoices (status);

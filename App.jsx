@@ -6,7 +6,8 @@ import {
   Search, Bell, Menu, BarChart3, TestTube, UserPlus, FileArchive,
   Syringe, Save, CheckCircle2, History, AlertCircle,
   DollarSign, UserCheck, UserX, ShoppingCart, Droplet,
-  FlaskConical
+  FlaskConical, TrendingUp, Wallet, Package, Link2,
+  RefreshCw, ClipboardCheck, PieChart, Receipt
 } from 'lucide-react';
 
 // ============================================================================
@@ -39,17 +40,24 @@ const fmtDateOnly = (d) => d ? new Date(d).toLocaleDateString() : '—';
 const NAV_CONFIG = {
   admin: [
     { key: 'overview', label: 'Overview', icon: BarChart3 },
+    { key: 'reports', label: 'Reports & Analytics', icon: TrendingUp },
     { key: 'staff', label: 'Staff Directory', icon: Users },
     { key: 'audit', label: 'Audit Logs', icon: FileArchive }
   ],
+  // Front Desk: Reception and Nursing/Triage duties are merged into a single
+  // role to streamline the patient journey through one team.
   receptionist: [
     { key: 'register', label: 'Patient Registration', icon: UserPlus },
     { key: 'checkin', label: 'Check-In', icon: Clock },
-    { key: 'billing', label: 'Billing & Invoices', icon: CreditCard }
+    { key: 'triage', label: 'Triage & Vitals', icon: Activity },
+    { key: 'immunization', label: 'Immunizations', icon: Syringe },
+    { key: 'billing', label: 'Billing & Payments', icon: CreditCard }
   ],
+  // Retained only so any pre-existing 'nurse' accounts keep working;
+  // new staff should be created with the 'receptionist' role.
   nurse: [
-    { key: 'triage', label: 'Triage Queue', icon: Clock },
-    { key: 'immunization', label: 'Immunizations', icon: Shield }
+    { key: 'triage', label: 'Triage & Vitals', icon: Activity },
+    { key: 'immunization', label: 'Immunizations', icon: Syringe }
   ],
   doctor: [
     { key: 'workspace', label: 'EMR Workspace', icon: Stethoscope }
@@ -62,7 +70,8 @@ const NAV_CONFIG = {
     { key: 'inventory', label: 'Inventory Control', icon: BarChart3 }
   ],
   patient: [
-    { key: 'notice', label: 'My Account', icon: Activity }
+    { key: 'record', label: 'My Health Record', icon: History },
+    { key: 'billing', label: 'My Invoices', icon: CreditCard }
   ]
 };
 
@@ -129,22 +138,205 @@ export default function App() {
   return (
     <DashboardLayout user={currentUser} onLogout={handleLogout} navItems={navItems} activeNav={navView} onNavClick={setNavView}>
       {currentUser.role === 'admin' && <AdminDashboard activeTab={navView} setActiveTab={setNavView} />}
-      {currentUser.role === 'receptionist' && <ReceptionistDashboard activeTab={navView} setActiveTab={setNavView} />}
-      {currentUser.role === 'nurse' && <NurseDashboard activeTab={navView} setActiveTab={setNavView} />}
-      {currentUser.role === 'doctor' && <DoctorDashboard />}
+      {(currentUser.role === 'receptionist' || currentUser.role === 'nurse') && <FrontDeskDashboard activeTab={navView} setActiveTab={setNavView} />}
+      {currentUser.role === 'doctor' && <DoctorDashboard currentUser={currentUser} />}
       {currentUser.role === 'lab_tech' && <LabDashboard />}
       {currentUser.role === 'pharmacist' && <PharmacistDashboard activeTab={navView} setActiveTab={setNavView} />}
-      {currentUser.role === 'patient' && <PatientNotice />}
+      {currentUser.role === 'patient' && <PatientDashboard activeTab={navView} setActiveTab={setNavView} />}
     </DashboardLayout>
   );
 }
 
-function PatientNotice() {
+// ============================================================================
+// PATIENT DASHBOARD — the patient portal: own EMR + mock online payments
+// ============================================================================
+function PatientDashboard({ activeTab, setActiveTab }) {
+  const [loading, setLoading] = useState(true);
+  const [notLinked, setNotLinked] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [history, setHistory] = useState({ consultations: [], vitals: [], lab_requests: [], prescriptions: [], certificates: [], immunizations: [] });
+  const [invoices, setInvoices] = useState([]);
+  const [payingId, setPayingId] = useState(null);
+
+  useEffect(() => { loadAll(); }, []);
+
+  const loadAll = async () => {
+    setLoading(true);
+    try {
+      const profileData = await apiFetch('/api/patients/me');
+      setProfile(profileData);
+      setNotLinked(false);
+      const [hist, inv] = await Promise.all([
+        apiFetch('/api/emr/history/me'),
+        apiFetch('/api/billing/me')
+      ]);
+      setHistory(hist);
+      setInvoices(inv);
+    } catch (e) {
+      setNotLinked(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const payMock = async (invoiceId) => {
+    if (!window.confirm('Simulate an online card payment for this invoice? This is a mock payment for demonstration purposes.')) return;
+    setPayingId(invoiceId);
+    try {
+      const res = await apiFetch(`/api/billing/${invoiceId}/pay-mock`, { method: 'POST' });
+      alert(`${res.message}\n\nReference: ${res.reference}`);
+      const inv = await apiFetch('/api/billing/me');
+      setInvoices(inv);
+    } catch (e) { alert(e.message); } finally { setPayingId(null); }
+  };
+
+  const timelineIcon = {
+    consultation: { icon: Stethoscope, color: 'text-indigo-600', bg: 'bg-indigo-100' },
+    vitals: { icon: Activity, color: 'text-blue-600', bg: 'bg-blue-100' },
+    lab: { icon: TestTube, color: 'text-amber-600', bg: 'bg-amber-100' },
+    prescription: { icon: Pill, color: 'text-emerald-600', bg: 'bg-emerald-100' },
+    certificate: { icon: FileText, color: 'text-purple-600', bg: 'bg-purple-100' },
+    immunization: { icon: Syringe, color: 'text-rose-600', bg: 'bg-rose-100' }
+  };
+
+  const buildTimeline = () => {
+    const entries = [];
+    history.consultations.forEach(c => entries.push({ type: 'consultation', date: c.created_at, data: c }));
+    history.vitals.forEach(v => entries.push({ type: 'vitals', date: v.recorded_at, data: v }));
+    history.lab_requests.forEach(l => entries.push({ type: 'lab', date: l.requested_at, data: l }));
+    history.prescriptions.forEach(p => entries.push({ type: 'prescription', date: p.created_at, data: p }));
+    history.certificates.forEach(c => entries.push({ type: 'certificate', date: c.created_at, data: c }));
+    history.immunizations.forEach(i => entries.push({ type: 'immunization', date: i.administered_at, data: i }));
+    return entries.sort((a, b) => new Date(b.date) - new Date(a.date));
+  };
+
+  const statusBadge = (status) => {
+    const map = { unpaid: 'bg-red-100 text-red-700', processing: 'bg-amber-100 text-amber-700', paid: 'bg-emerald-100 text-emerald-700' };
+    return map[status] || 'bg-slate-100 text-slate-600';
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <ActivitySquare className="animate-pulse h-12 w-12 text-blue-500" />
+      </div>
+    );
+  }
+
+  if (notLinked) {
+    return (
+      <div className="max-w-xl mx-auto mt-10 bg-white p-10 rounded-2xl border border-slate-200 shadow-sm text-center">
+        <ActivitySquare className="h-14 w-14 text-blue-600 mx-auto mb-4" />
+        <h2 className="text-xl font-bold text-slate-900 mb-2">No Clinical Record Linked Yet</h2>
+        <p className="text-slate-500">Your patient portal account is registered, but isn't linked to a clinical record yet. Please visit the Health Centre reception desk with your university ID — they can link your record to this account in seconds.</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="max-w-xl mx-auto mt-20 bg-white p-10 rounded-2xl border border-slate-200 shadow-sm text-center">
-      <ActivitySquare className="h-14 w-14 text-blue-600 mx-auto mb-4" />
-      <h2 className="text-xl font-bold text-slate-900 mb-2">Portal Account Active</h2>
-      <p className="text-slate-500">Your patient portal account is registered. Please visit the Health Centre reception desk with your university ID to have your clinical record created and begin using FUD HIMS services.</p>
+    <div className="space-y-8 animate-in fade-in duration-500">
+      <div className="flex justify-between items-center flex-wrap gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-slate-900">My Health Record</h1>
+          <p className="text-slate-500 text-sm mt-1">Welcome back, {profile?.full_name}</p>
+        </div>
+        <div className="flex bg-slate-200 p-1 rounded-xl">
+          <button onClick={() => setActiveTab('record')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'record' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Health Record</button>
+          <button onClick={() => setActiveTab('billing')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'billing' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>My Invoices</button>
+        </div>
+      </div>
+
+      {activeTab === 'record' && (
+        <div className="space-y-6">
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="flex flex-wrap gap-4 items-center justify-between">
+              <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-600">
+                <span className="capitalize px-2.5 py-1 bg-slate-100 text-slate-700 rounded-md font-bold">{profile.patient_type}</span>
+                {profile.university_id && <span className="font-medium">{profile.university_id}</span>}
+                {profile.blood_group && <span className="flex items-center font-medium"><Droplet className="h-3.5 w-3.5 mr-1 text-red-500"/> {profile.blood_group}</span>}
+                {profile.genotype && <span className="font-medium">Genotype: {profile.genotype}</span>}
+                {profile.dob && <span className="font-medium">DOB: {fmtDateOnly(profile.dob)}</span>}
+              </div>
+            </div>
+            {profile.allergies && (
+              <div className="mt-4 inline-flex items-center px-3 py-1.5 bg-red-50 border border-red-100 text-red-700 rounded-lg text-xs font-bold">
+                <AlertCircle className="h-3.5 w-3.5 mr-1.5"/> Allergy Alert: {profile.allergies}
+              </div>
+            )}
+          </div>
+
+          {history.vitals.length > 0 && (
+            <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-100">
+              <h4 className="font-bold text-blue-900 mb-3 flex items-center"><Activity className="h-4 w-4 mr-2"/> Latest Vitals</h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm bg-white p-4 rounded-lg shadow-sm border border-slate-100">
+                <div><span className="text-slate-400 block mb-1">BP</span><span className="font-bold text-slate-800 text-lg">{history.vitals[0].blood_pressure}</span></div>
+                <div><span className="text-slate-400 block mb-1">Heart Rate</span><span className="font-bold text-slate-800 text-lg">{history.vitals[0].heart_rate} bpm</span></div>
+                <div><span className="text-slate-400 block mb-1">Temp</span><span className="font-bold text-slate-800 text-lg">{history.vitals[0].temperature} °C</span></div>
+                <div><span className="text-slate-400 block mb-1">Weight</span><span className="font-bold text-slate-800 text-lg">{history.vitals[0].weight} kg</span></div>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <h4 className="font-bold text-slate-800 mb-3 flex items-center"><History className="h-4 w-4 mr-2"/> Full Medical Timeline</h4>
+            <div className="space-y-3">
+              {buildTimeline().length === 0 && <p className="text-sm text-slate-400 italic bg-white p-6 rounded-xl border border-slate-200">No records yet. Your history will appear here after your first visit.</p>}
+              {buildTimeline().map((entry, idx) => {
+                const cfg = timelineIcon[entry.type];
+                return (
+                  <div key={idx} className="flex space-x-3 bg-white p-4 rounded-xl border border-slate-100 shadow-sm">
+                    <div className={`p-2.5 h-fit rounded-lg ${cfg.bg}`}><cfg.icon className={`h-4 w-4 ${cfg.color}`} /></div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-start">
+                        <span className="font-bold text-slate-800 text-sm capitalize">{entry.type.replace('_', ' ')}</span>
+                        <span className="text-xs text-slate-400 flex-shrink-0 ml-2">{fmtDate(entry.date)}</span>
+                      </div>
+                      {entry.type === 'consultation' && <p className="text-sm text-slate-600 mt-1"><b>Diagnosis:</b> {entry.data.diagnosis} <span className="text-slate-400">— seen by Dr. {entry.data.doctor_name}</span></p>}
+                      {entry.type === 'vitals' && <p className="text-sm text-slate-600 mt-1">BP {entry.data.blood_pressure}, {entry.data.heart_rate} bpm, {entry.data.temperature}°C, {entry.data.weight}kg</p>}
+                      {entry.type === 'lab' && <p className="text-sm text-slate-600 mt-1">{entry.data.test_name} — <span className={`font-bold ${entry.data.status === 'completed' ? 'text-emerald-600' : 'text-amber-600'}`}>{entry.data.status}</span></p>}
+                      {entry.type === 'prescription' && <p className="text-sm text-slate-600 mt-1">{entry.data.items?.map(i => i.item_name).join(', ')} — <span className={`font-bold ${entry.data.status === 'dispensed' ? 'text-emerald-600' : 'text-amber-600'}`}>{entry.data.status}</span></p>}
+                      {entry.type === 'certificate' && <p className="text-sm text-slate-600 mt-1 capitalize">{entry.data.certificate_type.replace('_',' ')}: {fmtDateOnly(entry.data.start_date)} → {fmtDateOnly(entry.data.end_date)}</p>}
+                      {entry.type === 'immunization' && <p className="text-sm text-slate-600 mt-1">{entry.data.vaccine_name} ({entry.data.dose_number})</p>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'billing' && (
+        <div className="space-y-4">
+          {invoices.length === 0 ? (
+            <div className="bg-white p-10 rounded-2xl border border-slate-200 shadow-sm text-center text-slate-400">
+              <Receipt className="h-12 w-12 mx-auto mb-3 text-slate-200" />
+              No invoices on your account yet.
+            </div>
+          ) : invoices.map(inv => (
+            <div key={inv.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between flex-wrap gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-900">{inv.purpose}</span>
+                  <span className={`px-2 py-0.5 text-xs font-bold rounded-full capitalize ${statusBadge(inv.status)}`}>{inv.status}</span>
+                </div>
+                <div className="text-xs text-slate-400 mt-1">Issued {fmtDate(inv.created_at)}</div>
+                {inv.status === 'processing' && <div className="text-xs font-mono text-amber-600 mt-1">Ref: {inv.payment_reference} — awaiting Reception confirmation</div>}
+                {inv.status === 'paid' && <div className="text-xs text-emerald-600 mt-1">Paid & confirmed {fmtDate(inv.paid_at)}</div>}
+              </div>
+              <div className="flex items-center gap-4">
+                <span className="text-xl font-extrabold text-slate-900">{fmtMoney(inv.total_amount)}</span>
+                {inv.status === 'unpaid' && (
+                  <button onClick={() => payMock(inv.id)} disabled={payingId === inv.id} className="px-5 py-2.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition shadow-lg shadow-blue-200 flex items-center disabled:opacity-60">
+                    <Wallet className="h-4 w-4 mr-2"/> {payingId === inv.id ? 'Processing...' : 'Pay Now (Mock)'}
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+          <p className="text-xs text-slate-400 text-center pt-2">Payments are simulated for demonstration. No real transaction is processed — Reception confirms each payment before it's marked as paid.</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -620,8 +812,11 @@ function AdminDashboard({ activeTab: tab, setActiveTab: setTab }) {
   const [logs, setLogs] = useState([]);
   const [users, setUsers] = useState([]);
   const [staffForm, setStaffForm] = useState({ name: '', email: '', password: '', role: 'doctor' });
+  const [reports, setReports] = useState(null);
+  const [reportsLoading, setReportsLoading] = useState(false);
 
   useEffect(() => { loadData(); }, []);
+  useEffect(() => { if (tab === 'reports' && !reports) loadReports(); }, [tab]);
 
   const loadData = async () => {
     try {
@@ -634,6 +829,13 @@ function AdminDashboard({ activeTab: tab, setActiveTab: setTab }) {
       setLogs(logsData);
       setUsers(usersData);
     } catch (e) { console.error(e); }
+  };
+
+  const loadReports = async () => {
+    setReportsLoading(true);
+    try {
+      setReports(await apiFetch('/api/analytics/detailed'));
+    } catch (e) { console.error(e); } finally { setReportsLoading(false); }
   };
 
   const handleAddStaff = async (e) => {
@@ -658,20 +860,22 @@ function AdminDashboard({ activeTab: tab, setActiveTab: setTab }) {
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-slate-900">System Overview</h1>
-        <div className="flex bg-slate-200 p-1 rounded-xl">
+        <div className="flex bg-slate-200 p-1 rounded-xl flex-wrap">
           <button onClick={() => setTab('overview')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${tab === 'overview' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Overview</button>
+          <button onClick={() => setTab('reports')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${tab === 'reports' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Reports & Analytics</button>
           <button onClick={() => setTab('staff')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${tab === 'staff' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Staff Directory</button>
           <button onClick={() => setTab('audit')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${tab === 'audit' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Audit Logs</button>
         </div>
       </div>
 
       {/* Analytics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6">
         {[
           { label: 'Total Patients', value: stats.totalPatients, icon: Users, color: 'text-blue-600', bg: 'bg-blue-100' },
           { label: 'Consultations Today', value: stats.consultationsToday, icon: Stethoscope, color: 'text-indigo-600', bg: 'bg-indigo-100' },
           { label: 'Pending Lab Tests', value: stats.pendingLabs, icon: TestTube, color: 'text-amber-600', bg: 'bg-amber-100' },
           { label: 'Low Stock Alerts', value: stats.lowStock, icon: AlertCircle, color: 'text-red-600', bg: 'bg-red-100' },
+          { label: 'Awaiting Payment Confirmation', value: stats.processingCount || 0, icon: RefreshCw, color: 'text-amber-600', bg: 'bg-amber-100' },
           { label: 'Total Revenue', value: fmtMoney(stats.revenue), icon: DollarSign, color: 'text-emerald-600', bg: 'bg-emerald-100' },
         ].map((card, i) => (
           <div key={i} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
@@ -707,10 +911,9 @@ function AdminDashboard({ activeTab: tab, setActiveTab: setTab }) {
                 <label className="block text-sm font-medium text-slate-700 mb-1">Assign Role</label>
                 <select value={staffForm.role} onChange={e => setStaffForm({...staffForm, role: e.target.value})} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-blue-500 focus:border-blue-500">
                   <option value="doctor">Doctor</option>
-                  <option value="nurse">Nurse</option>
                   <option value="pharmacist">Pharmacist</option>
                   <option value="lab_tech">Lab Technician</option>
-                  <option value="receptionist">Receptionist</option>
+                  <option value="receptionist">Receptionist (Front Desk & Triage)</option>
                   <option value="admin">Administrator</option>
                 </select>
               </div>
@@ -734,6 +937,10 @@ function AdminDashboard({ activeTab: tab, setActiveTab: setTab }) {
             )}
           </div>
         </div>
+      )}
+
+      {tab === 'reports' && (
+        <AdminReportsPanel reports={reports} loading={reportsLoading} />
       )}
 
       {tab === 'staff' && (
@@ -809,13 +1016,181 @@ function AdminDashboard({ activeTab: tab, setActiveTab: setTab }) {
 }
 
 // ============================================================================
-// RECEPTIONIST DASHBOARD
+// ADMIN REPORTS & ANALYTICS PANEL — EMR activity, prescriptions, payments,
+// inventory value, and patient demographics. Built with lightweight CSS bar
+// charts (no external charting library) to stay within the file-count budget.
 // ============================================================================
-function ReceptionistDashboard({ activeTab, setActiveTab }) {
-  const emptyPatientForm = { university_id: '', patient_type: 'student', full_name: '', dob: '', gender: 'Male', blood_group: '', genotype: '', allergies: '', phone: '', address: '' };
+function AdminReportsPanel({ reports, loading }) {
+  if (loading || !reports) {
+    return (
+      <div className="flex items-center justify-center h-96 bg-white rounded-2xl border border-slate-200">
+        <ActivitySquare className="animate-pulse h-10 w-10 text-blue-500" />
+      </div>
+    );
+  }
+
+  const { emr, prescriptions, payments, inventory, patients } = reports;
+
+  const BarRow = ({ label, value, max, color = 'bg-blue-500', formatter = (v) => v }) => (
+    <div className="space-y-1">
+      <div className="flex justify-between text-xs font-semibold text-slate-600">
+        <span className="truncate pr-2">{label}</span>
+        <span className="flex-shrink-0">{formatter(value)}</span>
+      </div>
+      <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+        <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${max > 0 ? Math.max(4, (value / max) * 100) : 0}%` }}></div>
+      </div>
+    </div>
+  );
+
+  const TrendChart = ({ data, dateKey, valueKey, color = 'bg-indigo-500', formatter = (v) => v }) => {
+    const max = Math.max(1, ...data.map(d => Number(d[valueKey])));
+    return (
+      <div className="flex items-end space-x-1.5 h-32">
+        {data.length === 0 && <p className="text-xs text-slate-400 self-center">No activity in this period yet.</p>}
+        {data.map((d, i) => (
+          <div key={i} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+            <div className={`w-full ${color} rounded-t transition-all`} style={{ height: `${Math.max(4, (Number(d[valueKey]) / max) * 100)}%` }}></div>
+            <span className="text-[9px] text-slate-400 mt-1 rotate-0">{new Date(d[dateKey]).toLocaleDateString(undefined, { day: '2-digit', month: 'short' })}</span>
+            <div className="absolute -top-6 opacity-0 group-hover:opacity-100 transition bg-slate-900 text-white text-[10px] font-bold px-2 py-1 rounded pointer-events-none whitespace-nowrap">{formatter(d[valueKey])}</div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const maxDiagnosis = Math.max(1, ...emr.topDiagnoses.map(d => Number(d.count)));
+  const maxDrug = Math.max(1, ...prescriptions.topDrugsDispensed.map(d => Number(d.total_qty)));
+  const rxByStatus = Object.fromEntries(prescriptions.totalsByStatus.map(r => [r.status, Number(r.count)]));
+  const totalRx = Object.values(rxByStatus).reduce((a, b) => a + b, 0);
+  const maxRevenueType = Math.max(1, ...payments.revenueByType.map(r => Number(r.total)));
+  const maxInvValue = Math.max(1, ...inventory.topDispensedByValue.map(d => Number(d.total_value)));
+  const totalPatientsByType = patients.byType.reduce((a, r) => a + Number(r.count), 0);
+  const totalPatientsByGender = patients.byGender.reduce((a, r) => a + Number(r.count), 0);
+
+  return (
+    <div className="space-y-8 animate-in fade-in duration-500">
+      {/* EMR ACTIVITY */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-900 mb-1 flex items-center"><Stethoscope className="h-4 w-4 mr-2 text-indigo-600"/> Consultations — Last 14 Days</h3>
+          <p className="text-xs text-slate-400 mb-4">Daily EMR consultation activity across all doctors</p>
+          <TrendChart data={emr.consultationsTrend} dateKey="day" valueKey="count" color="bg-indigo-500" />
+        </div>
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-900 mb-4 flex items-center"><ClipboardCheck className="h-4 w-4 mr-2 text-indigo-600"/> Top Diagnoses</h3>
+          <div className="space-y-3">
+            {emr.topDiagnoses.length === 0 && <p className="text-xs text-slate-400">No consultations recorded yet.</p>}
+            {emr.topDiagnoses.map((d, i) => (
+              <BarRow key={i} label={d.diagnosis} value={Number(d.count)} max={maxDiagnosis} color="bg-indigo-500" />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* PRESCRIPTIONS */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-900 mb-4 flex items-center"><Pill className="h-4 w-4 mr-2 text-emerald-600"/> Prescription Status</h3>
+          <div className="space-y-4">
+            {['pending', 'dispensed', 'cancelled'].map(status => (
+              <BarRow key={status} label={status} value={rxByStatus[status] || 0} max={Math.max(1, totalRx)} color={status === 'dispensed' ? 'bg-emerald-500' : status === 'pending' ? 'bg-amber-500' : 'bg-slate-400'} />
+            ))}
+            <div className="pt-2 text-xs text-slate-400">{totalRx} prescriptions total</div>
+          </div>
+        </div>
+        <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-900 mb-4 flex items-center"><FlaskConical className="h-4 w-4 mr-2 text-emerald-600"/> Most Dispensed Medications</h3>
+          <div className="space-y-3">
+            {prescriptions.topDrugsDispensed.length === 0 && <p className="text-xs text-slate-400">No medications dispensed yet.</p>}
+            {prescriptions.topDrugsDispensed.map((d, i) => (
+              <BarRow key={i} label={d.item_name} value={Number(d.total_qty)} max={maxDrug} color="bg-emerald-500" formatter={(v) => `${v} units`} />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* PAYMENTS */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-900 mb-1 flex items-center"><Wallet className="h-4 w-4 mr-2 text-blue-600"/> Confirmed Revenue — Last 14 Days</h3>
+          <p className="text-xs text-slate-400 mb-4">Daily total of payments confirmed by Reception</p>
+          <TrendChart data={payments.revenueTrend} dateKey="day" valueKey="total" color="bg-blue-500" formatter={fmtMoney} />
+        </div>
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-900 mb-4 flex items-center"><PieChart className="h-4 w-4 mr-2 text-blue-600"/> Revenue by Source</h3>
+          <div className="space-y-3">
+            {payments.revenueByType.length === 0 && <p className="text-xs text-slate-400">No confirmed payments yet.</p>}
+            {payments.revenueByType.map((r, i) => (
+              <BarRow key={i} label={r.reference_type || 'manual'} value={Number(r.total)} max={maxRevenueType} color="bg-blue-500" formatter={fmtMoney} />
+            ))}
+          </div>
+          <div className="mt-5 pt-4 border-t border-slate-100 flex justify-between text-sm">
+            <span className="text-slate-500 font-medium">Outstanding (Unpaid)</span>
+            <span className="font-bold text-red-600">{fmtMoney(payments.outstandingTotal)} <span className="text-slate-400 font-normal">({payments.outstandingCount})</span></span>
+          </div>
+        </div>
+      </div>
+
+      {/* INVENTORY */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-900 mb-4 flex items-center"><Package className="h-4 w-4 mr-2 text-amber-600"/> Inventory Value</h3>
+          <div className="text-3xl font-extrabold text-slate-900 mb-4">{fmtMoney(inventory.totalValue)}</div>
+          <div className="space-y-3">
+            {inventory.byCategory.map((c, i) => (
+              <div key={i} className="flex justify-between text-sm bg-slate-50 p-3 rounded-lg">
+                <span className="font-semibold text-slate-700">{c.category}</span>
+                <span className="text-slate-500">{c.items} items · {c.units} units</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-900 mb-4 flex items-center"><TrendingUp className="h-4 w-4 mr-2 text-amber-600"/> Highest-Value Dispensed Items</h3>
+          <div className="space-y-3">
+            {inventory.topDispensedByValue.length === 0 && <p className="text-xs text-slate-400">No dispensing activity yet.</p>}
+            {inventory.topDispensedByValue.map((d, i) => (
+              <BarRow key={i} label={d.item_name} value={Number(d.total_value)} max={maxInvValue} color="bg-amber-500" formatter={fmtMoney} />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* PATIENT DEMOGRAPHICS */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-900 mb-4 flex items-center"><Users className="h-4 w-4 mr-2 text-slate-600"/> Patients by Type</h3>
+          <div className="space-y-3">
+            {patients.byType.map((p, i) => (
+              <BarRow key={i} label={p.patient_type} value={Number(p.count)} max={Math.max(1, totalPatientsByType)} color="bg-slate-500" />
+            ))}
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <h3 className="font-bold text-slate-900 mb-4 flex items-center"><Users className="h-4 w-4 mr-2 text-slate-600"/> Patients by Gender</h3>
+          <div className="space-y-3">
+            {patients.byGender.length === 0 && <p className="text-xs text-slate-400">No demographic data yet.</p>}
+            {patients.byGender.map((p, i) => (
+              <BarRow key={i} label={p.gender} value={Number(p.count)} max={Math.max(1, totalPatientsByGender)} color="bg-slate-500" />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// FRONT DESK DASHBOARD — Reception + Triage/Nursing merged into one team
+// ============================================================================
+function FrontDeskDashboard({ activeTab, setActiveTab }) {
+  // --- Registration ---
+  const emptyPatientForm = { university_id: '', patient_type: 'student', full_name: '', dob: '', gender: 'Male', blood_group: '', genotype: '', allergies: '', phone: '', address: '', linked_user_email: '' };
   const [patientForm, setPatientForm] = useState(emptyPatientForm);
   const [lastRegistered, setLastRegistered] = useState(null);
 
+  // --- Check-In ---
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [selectedPatient, setSelectedPatient] = useState(null);
@@ -823,9 +1198,23 @@ function ReceptionistDashboard({ activeTab, setActiveTab }) {
   const [checkinForm, setCheckinForm] = useState({ assigned_doctor_id: '', priority: 'normal' });
   const [activeQueue, setActiveQueue] = useState([]);
 
+  // --- Triage & Vitals ---
+  const [triageQueue, setTriageQueue] = useState([]);
+  const [triagePatient, setTriagePatient] = useState(null);
+  const [vitals, setVitals] = useState({ blood_pressure: '', temperature: '', weight: '', heart_rate: '' });
+
+  // --- Immunizations ---
+  const [immSearchTerm, setImmSearchTerm] = useState('');
+  const [immSearchResults, setImmSearchResults] = useState([]);
+  const [immPatient, setImmPatient] = useState(null);
+  const [immHistory, setImmHistory] = useState([]);
+  const [immForm, setImmForm] = useState({ vaccine_name: '', dose_number: '', next_due_date: '' });
+
+  // --- Billing & Payments ---
   const [billingForm, setBillingForm] = useState({ patient_id: '', total_amount: '', purpose: '' });
   const [patients, setPatients] = useState([]);
   const [unpaidInvoices, setUnpaidInvoices] = useState([]);
+  const [processingInvoices, setProcessingInvoices] = useState([]);
   const [recentInvoices, setRecentInvoices] = useState([]);
 
   useEffect(() => {
@@ -833,6 +1222,7 @@ function ReceptionistDashboard({ activeTab, setActiveTab }) {
       apiFetch('/api/staff/doctors').then(setDoctors).catch(console.error);
       loadQueue();
     }
+    if (activeTab === 'triage') loadTriageQueue();
     if (activeTab === 'billing') {
       apiFetch('/api/patients').then(setPatients).catch(console.error);
       loadInvoices();
@@ -840,8 +1230,17 @@ function ReceptionistDashboard({ activeTab, setActiveTab }) {
   }, [activeTab]);
 
   const loadQueue = () => apiFetch('/api/queue/active').then(setActiveQueue).catch(console.error);
+
+  const loadTriageQueue = async () => {
+    try {
+      const data = await apiFetch('/api/queue/active');
+      setTriageQueue(data.filter(q => q.status === 'waiting_triage'));
+    } catch (e) { console.error(e); }
+  };
+
   const loadInvoices = () => {
     apiFetch('/api/billing/unpaid').then(setUnpaidInvoices).catch(console.error);
+    apiFetch('/api/billing/processing').then(setProcessingInvoices).catch(console.error);
     apiFetch('/api/billing/recent').then(setRecentInvoices).catch(console.error);
   };
 
@@ -877,6 +1276,53 @@ function ReceptionistDashboard({ activeTab, setActiveTab }) {
     } catch (e) { alert(e.message); }
   };
 
+  const submitVitals = async (e) => {
+    e.preventDefault();
+    try {
+      await apiFetch('/api/vitals', {
+        method: 'POST',
+        body: JSON.stringify({ patient_id: triagePatient.patient_id, ...vitals })
+      });
+      alert("Vitals logged securely! Patient has been moved to the Doctor's queue.");
+      setTriagePatient(null);
+      setVitals({ blood_pressure: '', temperature: '', weight: '', heart_rate: '' });
+      loadTriageQueue();
+    } catch (e) { alert(e.message); }
+  };
+
+  const runImmSearch = async (term) => {
+    setImmSearchTerm(term);
+    setImmPatient(null);
+    setImmHistory([]);
+    if (term.trim().length < 2) { setImmSearchResults([]); return; }
+    try {
+      const data = await apiFetch(`/api/patients?search=${encodeURIComponent(term)}`);
+      setImmSearchResults(data);
+    } catch (e) { console.error(e); }
+  };
+
+  const selectImmPatient = async (p) => {
+    setImmPatient(p);
+    setImmSearchResults([]);
+    setImmSearchTerm(p.full_name);
+    try {
+      const hist = await apiFetch(`/api/immunizations/${p.id}`);
+      setImmHistory(hist);
+    } catch (e) { console.error(e); }
+  };
+
+  const submitImmunization = async (e) => {
+    e.preventDefault();
+    if (!immPatient) return alert('Select a patient first.');
+    try {
+      await apiFetch('/api/immunizations', { method: 'POST', body: JSON.stringify({ patient_id: immPatient.id, ...immForm }) });
+      alert('Vaccination record saved successfully!');
+      setImmForm({ vaccine_name: '', dose_number: '', next_due_date: '' });
+      const hist = await apiFetch(`/api/immunizations/${immPatient.id}`);
+      setImmHistory(hist);
+    } catch (e) { alert(e.message); }
+  };
+
   const generateInvoice = async (e) => {
     e.preventDefault();
     try {
@@ -887,11 +1333,14 @@ function ReceptionistDashboard({ activeTab, setActiveTab }) {
     } catch (e) { alert(e.message); }
   };
 
-  const processPayment = async (id) => {
-    if (!window.confirm("Confirm payment received?")) return;
+  const confirmPayment = async (inv) => {
+    const msg = inv.status === 'processing'
+      ? `Confirm receipt of mock payment ${inv.payment_reference}?`
+      : 'Confirm cash/in-person payment received?';
+    if (!window.confirm(msg)) return;
     try {
-      await apiFetch(`/api/billing/${id}/pay`, { method: 'PUT' });
-      alert('Payment verified and receipt generated.');
+      await apiFetch(`/api/billing/${inv.id}/confirm`, { method: 'PUT' });
+      alert('Payment confirmed and receipt generated.');
       loadInvoices();
     } catch (e) { alert(e.message); }
   };
@@ -911,9 +1360,11 @@ function ReceptionistDashboard({ activeTab, setActiveTab }) {
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex justify-between items-center flex-wrap gap-4">
         <h1 className="text-3xl font-bold text-slate-900">Front Desk Operations</h1>
-        <div className="flex bg-slate-200 p-1 rounded-xl">
+        <div className="flex bg-slate-200 p-1 rounded-xl flex-wrap">
           <button onClick={() => setActiveTab('register')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'register' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Registration</button>
           <button onClick={() => setActiveTab('checkin')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'checkin' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Check-In</button>
+          <button onClick={() => setActiveTab('triage')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'triage' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Triage & Vitals</button>
+          <button onClick={() => setActiveTab('immunization')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'immunization' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Immunizations</button>
           <button onClick={() => setActiveTab('billing')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'billing' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Billing & Payments</button>
         </div>
       </div>
@@ -976,6 +1427,11 @@ function ReceptionistDashboard({ activeTab, setActiveTab }) {
                 <label className="block text-sm font-medium text-slate-700 mb-1">Known Allergies (optional)</label>
                 <input type="text" placeholder="e.g. Penicillin" value={patientForm.allergies} onChange={e => setPatientForm({...patientForm, allergies: e.target.value})} className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500" />
               </div>
+              <div className="md:col-span-2 pt-2 border-t border-slate-100 mt-2">
+                <label className="block text-sm font-medium text-slate-700 mb-1 flex items-center"><Link2 className="h-3.5 w-3.5 mr-1.5 text-blue-500"/> Link Patient Portal Account (optional)</label>
+                <input type="email" placeholder="Email used for their patient portal account" value={patientForm.linked_user_email} onChange={e => setPatientForm({...patientForm, linked_user_email: e.target.value})} className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500" />
+                <p className="text-xs text-slate-400 mt-1">If the patient has a portal account, linking it here lets them view this record and pay invoices online.</p>
+              </div>
               <div className="md:col-span-2 pt-2">
                 <button type="submit" className="w-full md:w-auto px-8 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition shadow-lg shadow-blue-200">Complete Registration</button>
               </div>
@@ -991,6 +1447,7 @@ function ReceptionistDashboard({ activeTab, setActiveTab }) {
                 <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-xl">
                   <div className="font-bold text-slate-900">{lastRegistered.full_name}</div>
                   <div className="text-xs text-slate-500 mt-1">{lastRegistered.university_id || 'No University ID'} · {lastRegistered.patient_type}</div>
+                  {lastRegistered.linked_user_id && <div className="text-xs text-blue-600 font-bold mt-1 flex items-center"><Link2 className="h-3 w-3 mr-1"/> Portal account linked</div>}
                 </div>
                 <button onClick={() => { setActiveTab('checkin'); setSearchTerm(lastRegistered.full_name); runSearch(lastRegistered.full_name); }} className="w-full py-2.5 bg-slate-800 text-white rounded-xl font-bold text-sm hover:bg-slate-900 transition flex items-center justify-center">
                   <Clock className="h-4 w-4 mr-2"/> Check In Now
@@ -1057,160 +1514,16 @@ function ReceptionistDashboard({ activeTab, setActiveTab }) {
         </div>
       )}
 
-      {activeTab === 'billing' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <div className="space-y-8">
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <h2 className="text-lg font-bold text-slate-900 mb-6 flex items-center"><CreditCard className="mr-2 h-5 w-5 text-blue-600"/> Generate Ad-hoc Invoice</h2>
-              <form onSubmit={generateInvoice} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Select Patient</label>
-                  <select required value={billingForm.patient_id} onChange={e => setBillingForm({...billingForm, patient_id: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:ring-blue-500">
-                    <option value="">Choose...</option>
-                    {patients.map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.university_id})</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Purpose / Service</label>
-                  <input required type="text" placeholder="e.g. Medical Report, Referral Letter" value={billingForm.purpose} onChange={e => setBillingForm({...billingForm, purpose: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:ring-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Total Amount (₦)</label>
-                  <input required type="number" min="0" value={billingForm.total_amount} onChange={e => setBillingForm({...billingForm, total_amount: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:ring-blue-500" />
-                </div>
-                <button type="submit" className="w-full py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition shadow-lg">Create Invoice</button>
-              </form>
-            </div>
-
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <h3 className="font-bold text-slate-800 mb-4">Recently Paid</h3>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {recentInvoices.length === 0 ? <p className="text-sm text-slate-400">No payments recorded yet.</p> : recentInvoices.map(inv => (
-                  <div key={inv.id} className="p-3 bg-slate-50 rounded-xl flex justify-between items-center text-sm">
-                    <div>
-                      <div className="font-bold text-slate-800">{inv.patient_name}</div>
-                      <div className="text-xs text-slate-400">{inv.purpose}</div>
-                    </div>
-                    <div className="font-bold text-emerald-600">{fmtMoney(inv.total_amount)}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[600px]">
-            <h2 className="text-lg font-bold text-slate-900 mb-4">Unpaid Invoices <span className="text-sm font-normal text-slate-400">(auto-generated from consultations, labs & pharmacy)</span></h2>
-            <div className="overflow-y-auto flex-1 space-y-3">
-              {unpaidInvoices.length === 0 ? <p className="text-slate-400 text-sm">No pending payments.</p> : unpaidInvoices.map(inv => (
-                <div key={inv.id} className="p-4 border border-slate-100 bg-slate-50 rounded-xl flex justify-between items-center">
-                  <div>
-                    <div className="font-bold text-slate-900">{inv.patient_name}</div>
-                    <div className="text-xs text-slate-500">{inv.purpose}</div>
-                    <div className="text-sm font-bold text-red-600 mt-1">{fmtMoney(inv.total_amount)}</div>
-                  </div>
-                  <button onClick={() => processPayment(inv.id)} className="px-4 py-2 bg-green-600 text-white text-sm font-bold rounded-lg hover:bg-green-700 transition">Clear Payment</button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ============================================================================
-// NURSE DASHBOARD
-// ============================================================================
-function NurseDashboard({ activeTab, setActiveTab }) {
-  const [queue, setQueue] = useState([]);
-  const [activePatient, setActivePatient] = useState(null);
-  const [vitals, setVitals] = useState({ blood_pressure: '', temperature: '', weight: '', heart_rate: '' });
-
-  const [searchTerm, setSearchTerm] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [immPatient, setImmPatient] = useState(null);
-  const [immHistory, setImmHistory] = useState([]);
-  const [immForm, setImmForm] = useState({ vaccine_name: '', dose_number: '', next_due_date: '' });
-
-  useEffect(() => {
-    if (activeTab === 'triage') loadQueue();
-  }, [activeTab]);
-
-  const loadQueue = async () => {
-    try {
-      const data = await apiFetch('/api/queue/active');
-      setQueue(data.filter(q => q.status === 'waiting_triage'));
-    } catch (e) { console.error(e); }
-  };
-
-  const submitVitals = async (e) => {
-    e.preventDefault();
-    try {
-      await apiFetch('/api/vitals', {
-        method: 'POST',
-        body: JSON.stringify({ patient_id: activePatient.patient_id, ...vitals })
-      });
-      alert("Vitals logged securely! Patient has been moved to the Doctor's queue.");
-      setActivePatient(null);
-      setVitals({ blood_pressure: '', temperature: '', weight: '', heart_rate: '' });
-      loadQueue();
-    } catch (e) { alert(e.message); }
-  };
-
-  const runImmSearch = async (term) => {
-    setSearchTerm(term);
-    setImmPatient(null);
-    setImmHistory([]);
-    if (term.trim().length < 2) { setSearchResults([]); return; }
-    try {
-      const data = await apiFetch(`/api/patients?search=${encodeURIComponent(term)}`);
-      setSearchResults(data);
-    } catch (e) { console.error(e); }
-  };
-
-  const selectImmPatient = async (p) => {
-    setImmPatient(p);
-    setSearchResults([]);
-    setSearchTerm(p.full_name);
-    try {
-      const hist = await apiFetch(`/api/immunizations/${p.id}`);
-      setImmHistory(hist);
-    } catch (e) { console.error(e); }
-  };
-
-  const submitImmunization = async (e) => {
-    e.preventDefault();
-    if (!immPatient) return alert('Select a patient first.');
-    try {
-      await apiFetch('/api/immunizations', { method: 'POST', body: JSON.stringify({ patient_id: immPatient.id, ...immForm }) });
-      alert('Vaccination record saved successfully!');
-      setImmForm({ vaccine_name: '', dose_number: '', next_due_date: '' });
-      const hist = await apiFetch(`/api/immunizations/${immPatient.id}`);
-      setImmHistory(hist);
-    } catch (e) { alert(e.message); }
-  };
-
-  return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold text-slate-900">Nursing Station</h1>
-        <div className="flex bg-slate-200 p-1 rounded-xl">
-          <button onClick={() => setActiveTab('triage')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'triage' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Triage Queue</button>
-          <button onClick={() => setActiveTab('immunization')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'immunization' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Immunizations</button>
-        </div>
-      </div>
-
-      {activeTab === 'triage' ? (
+      {activeTab === 'triage' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-1 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[600px]">
             <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
               <h3 className="font-bold text-slate-800 flex items-center"><Clock className="h-5 w-5 mr-2 text-blue-600"/> Waiting Triage</h3>
-              <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2.5 py-1 rounded-full">{queue.length}</span>
+              <span className="bg-blue-100 text-blue-700 text-xs font-bold px-2.5 py-1 rounded-full">{triageQueue.length}</span>
             </div>
             <div className="overflow-y-auto flex-1 p-2 space-y-2">
-              {queue.map(p => (
-                <div key={p.id} onClick={() => setActivePatient(p)} className={`p-4 rounded-xl cursor-pointer border transition-all duration-200 ${activePatient?.id === p.id ? 'bg-blue-50 border-blue-200 shadow-sm' : 'hover:bg-slate-50 border-transparent hover:border-slate-200'}`}>
+              {triageQueue.map(p => (
+                <div key={p.id} onClick={() => setTriagePatient(p)} className={`p-4 rounded-xl cursor-pointer border transition-all duration-200 ${triagePatient?.id === p.id ? 'bg-blue-50 border-blue-200 shadow-sm' : 'hover:bg-slate-50 border-transparent hover:border-slate-200'}`}>
                   <div className="font-bold text-slate-900">{p.patient_name}</div>
                   <div className="text-xs text-slate-400 mt-2 flex justify-between">
                     <span className="capitalize text-blue-600 font-medium">{p.patient_type}</span>
@@ -1219,12 +1532,12 @@ function NurseDashboard({ activeTab, setActiveTab }) {
                   {p.priority === 'urgent' && <span className="inline-block mt-2 px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">URGENT</span>}
                 </div>
               ))}
-              {queue.length === 0 && <p className="p-6 text-sm text-slate-400 text-center">No patients waiting for triage.</p>}
+              {triageQueue.length === 0 && <p className="p-6 text-sm text-slate-400 text-center">No patients waiting for triage.</p>}
             </div>
           </div>
 
           <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm p-8 h-[600px] flex flex-col">
-            {!activePatient ? (
+            {!triagePatient ? (
               <div className="flex-1 flex flex-col items-center justify-center text-slate-400">
                 <Activity className="h-16 w-16 mb-4 text-slate-200" />
                 <p className="font-medium text-lg text-slate-500">Select a patient from the queue to record vitals</p>
@@ -1233,13 +1546,13 @@ function NurseDashboard({ activeTab, setActiveTab }) {
               <form onSubmit={submitVitals} className="space-y-6 flex-1 flex flex-col">
                 <div className="mb-2 pb-4 border-b border-slate-100 flex justify-between items-center">
                   <div>
-                    <h3 className="text-xl font-bold text-slate-800">{activePatient.patient_name}</h3>
+                    <h3 className="text-xl font-bold text-slate-800">{triagePatient.patient_name}</h3>
                     <div className="text-xs text-slate-400 mt-1 flex items-center gap-3">
-                      {activePatient.blood_group && <span className="flex items-center"><Droplet className="h-3 w-3 mr-1"/> {activePatient.blood_group}</span>}
-                      {activePatient.gender && <span>{activePatient.gender}</span>}
+                      {triagePatient.blood_group && <span className="flex items-center"><Droplet className="h-3 w-3 mr-1"/> {triagePatient.blood_group}</span>}
+                      {triagePatient.gender && <span>{triagePatient.gender}</span>}
                     </div>
                   </div>
-                  <span className="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider">{activePatient.patient_type}</span>
+                  <span className="bg-blue-100 text-blue-700 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider">{triagePatient.patient_type}</span>
                 </div>
                 <div className="grid grid-cols-2 gap-6">
                   <div>
@@ -1268,13 +1581,15 @@ function NurseDashboard({ activeTab, setActiveTab }) {
             )}
           </div>
         </div>
-      ) : (
+      )}
+
+      {activeTab === 'immunization' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
             <h2 className="text-lg font-bold text-slate-900 mb-4 flex items-center border-b pb-4"><Search className="mr-3 h-5 w-5 text-emerald-600"/> Find Patient</h2>
-            <input type="text" placeholder="Search by name or university ID..." value={searchTerm} onChange={e => runImmSearch(e.target.value)} className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 mb-3" />
+            <input type="text" placeholder="Search by name or university ID..." value={immSearchTerm} onChange={e => runImmSearch(e.target.value)} className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 mb-3" />
             <div className="space-y-2 max-h-48 overflow-y-auto mb-4">
-              {searchResults.map(p => (
+              {immSearchResults.map(p => (
                 <div key={p.id} onClick={() => selectImmPatient(p)} className="p-3 rounded-xl cursor-pointer border border-transparent hover:bg-slate-50 hover:border-slate-200 transition">
                   <div className="font-bold text-slate-900">{p.full_name}</div>
                   <div className="text-xs text-slate-500">{p.university_id || 'No ID'}</div>
@@ -1327,15 +1642,101 @@ function NurseDashboard({ activeTab, setActiveTab }) {
           </div>
         </div>
       )}
+
+      {activeTab === 'billing' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="space-y-8">
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+              <h2 className="text-lg font-bold text-slate-900 mb-6 flex items-center"><CreditCard className="mr-2 h-5 w-5 text-blue-600"/> Generate Ad-hoc Invoice</h2>
+              <form onSubmit={generateInvoice} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Select Patient</label>
+                  <select required value={billingForm.patient_id} onChange={e => setBillingForm({...billingForm, patient_id: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:ring-blue-500">
+                    <option value="">Choose...</option>
+                    {patients.map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.university_id})</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Purpose / Service</label>
+                  <input required type="text" placeholder="e.g. Medical Report, Referral Letter" value={billingForm.purpose} onChange={e => setBillingForm({...billingForm, purpose: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Total Amount (₦)</label>
+                  <input required type="number" min="0" value={billingForm.total_amount} onChange={e => setBillingForm({...billingForm, total_amount: e.target.value})} className="w-full px-4 py-2 border border-slate-300 rounded-xl focus:ring-blue-500" />
+                </div>
+                <button type="submit" className="w-full py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition shadow-lg">Create Invoice</button>
+              </form>
+            </div>
+
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+              <h3 className="font-bold text-slate-800 mb-4">Recently Paid</h3>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {recentInvoices.length === 0 ? <p className="text-sm text-slate-400">No payments recorded yet.</p> : recentInvoices.map(inv => (
+                  <div key={inv.id} className="p-3 bg-slate-50 rounded-xl flex justify-between items-center text-sm">
+                    <div>
+                      <div className="font-bold text-slate-800">{inv.patient_name}</div>
+                      <div className="text-xs text-slate-400">{inv.purpose}</div>
+                    </div>
+                    <div className="font-bold text-emerald-600">{fmtMoney(inv.total_amount)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-8">
+            {processingInvoices.length > 0 && (
+              <div className="bg-white p-6 rounded-2xl border border-amber-200 shadow-sm">
+                <h2 className="text-lg font-bold text-slate-900 mb-4 flex items-center"><RefreshCw className="mr-2 h-5 w-5 text-amber-600"/> Awaiting Payment Confirmation</h2>
+                <div className="space-y-3">
+                  {processingInvoices.map(inv => (
+                    <div key={inv.id} className="p-4 border border-amber-100 bg-amber-50 rounded-xl">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="font-bold text-slate-900">{inv.patient_name}</div>
+                          <div className="text-xs text-slate-500">{inv.purpose}</div>
+                          <div className="text-xs font-mono text-amber-700 mt-1">Ref: {inv.payment_reference}</div>
+                        </div>
+                        <div className="text-sm font-bold text-amber-700">{fmtMoney(inv.total_amount)}</div>
+                      </div>
+                      <button onClick={() => confirmPayment(inv)} className="w-full mt-3 px-4 py-2 bg-amber-600 text-white text-sm font-bold rounded-lg hover:bg-amber-700 transition flex items-center justify-center">
+                        <ClipboardCheck className="h-4 w-4 mr-2"/> Confirm Payment Received
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[600px]">
+              <h2 className="text-lg font-bold text-slate-900 mb-4">Unpaid Invoices <span className="text-sm font-normal text-slate-400">(auto-generated from consultations, labs & pharmacy)</span></h2>
+              <div className="overflow-y-auto flex-1 space-y-3">
+                {unpaidInvoices.length === 0 ? <p className="text-slate-400 text-sm">No pending payments.</p> : unpaidInvoices.map(inv => (
+                  <div key={inv.id} className="p-4 border border-slate-100 bg-slate-50 rounded-xl flex justify-between items-center">
+                    <div>
+                      <div className="font-bold text-slate-900">{inv.patient_name}</div>
+                      <div className="text-xs text-slate-500">{inv.purpose}</div>
+                      <div className="text-sm font-bold text-red-600 mt-1">{fmtMoney(inv.total_amount)}</div>
+                    </div>
+                    <button onClick={() => confirmPayment(inv)} className="px-4 py-2 bg-green-600 text-white text-sm font-bold rounded-lg hover:bg-green-700 transition">Clear Payment</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+
 // ============================================================================
 // DOCTOR DASHBOARD — the core EMR workspace
 // ============================================================================
-function DoctorDashboard() {
+function DoctorDashboard({ currentUser }) {
   const [queue, setQueue] = useState([]);
+  const [pendingTriage, setPendingTriage] = useState([]);
   const [activePatient, setActivePatient] = useState(null);
   const [patientProfile, setPatientProfile] = useState(null);
   const [activeTab, setActiveTab] = useState('history');
@@ -1352,12 +1753,22 @@ function DoctorDashboard() {
   useEffect(() => {
     loadQueue();
     apiFetch('/api/inventory').then(setInventory).catch(console.error);
+    // Live-ish refresh so a doctor sees patients land the moment a nurse finishes triage
+    const interval = setInterval(loadQueue, 15000);
+    return () => clearInterval(interval);
   }, []);
 
   const loadQueue = async () => {
     try {
       const data = await apiFetch('/api/queue/active');
-      setQueue(data.filter(q => q.status === 'waiting_doctor'));
+      const myId = currentUser?.id;
+      // A patient reaches the doctor only after triage (status flips to
+      // waiting_doctor once a nurse logs vitals). Show patients explicitly
+      // assigned to this doctor, plus any unassigned pool patients.
+      setQueue(data.filter(q => q.status === 'waiting_doctor' && (!q.assigned_doctor_id || q.assigned_doctor_id === myId)));
+      // Patients already checked in and assigned to this doctor, but still
+      // sitting with the Nurse — surfaced so the queue never looks silently empty.
+      setPendingTriage(data.filter(q => q.status === 'waiting_triage' && q.assigned_doctor_id === myId));
     } catch (e) { console.error(e); }
   };
 
@@ -1495,6 +1906,14 @@ function DoctorDashboard() {
             ))}
             {queue.length === 0 && <p className="p-6 text-sm text-slate-400 text-center">No patients waiting.</p>}
           </div>
+          {pendingTriage.length > 0 && (
+            <div className="p-3 border-t border-slate-100 bg-amber-50">
+              <div className="text-xs font-bold text-amber-700 flex items-center">
+                <AlertCircle className="h-3.5 w-3.5 mr-1.5 flex-shrink-0" />
+                {pendingTriage.length} patient(s) checked in for you, awaiting Reception triage
+              </div>
+            </div>
+          )}
         </div>
 
         {/* EMR Main Area */}

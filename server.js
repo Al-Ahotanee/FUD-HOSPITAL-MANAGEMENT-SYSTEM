@@ -190,17 +190,44 @@ app.get('/api/staff/doctors', authenticate, authorize(['admin', 'receptionist', 
 
 // --- 3. PATIENTS (Receptionist / Admin) -------------------------------------
 app.post('/api/patients', authenticate, authorize(['admin', 'receptionist']), async (req, res) => {
-  const { university_id, patient_type, full_name, dob, gender, blood_group, genotype, allergies, phone, address } = req.body;
+  const { university_id, patient_type, full_name, dob, gender, blood_group, genotype, allergies, phone, address, linked_user_email } = req.body;
   if (!full_name || !patient_type) return res.status(400).json({ error: 'Full name and patient type are required.' });
   try {
+    // Optional: link this clinical record to an existing patient-portal login
+    // account, so the patient can view their EMR and pay bills online.
+    let linkedUserId = null;
+    if (linked_user_email) {
+      const found = await pool.query("SELECT id FROM users WHERE email = $1 AND role = 'patient'", [linked_user_email]);
+      if (found.rows.length === 0) return res.status(400).json({ error: 'No patient portal account found with that email. Leave blank to register without linking.' });
+      const alreadyLinked = await pool.query('SELECT id FROM patients WHERE linked_user_id = $1', [found.rows[0].id]);
+      if (alreadyLinked.rows.length > 0) return res.status(400).json({ error: 'That portal account is already linked to a clinical record.' });
+      linkedUserId = found.rows[0].id;
+    }
+
     const result = await withTransaction(req.user.id, async (client) => {
       return await client.query(
-        `INSERT INTO patients (university_id, patient_type, full_name, dob, gender, blood_group, genotype, allergies, phone, address, registered_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-        [university_id || null, patient_type, full_name, dob || null, gender || null, blood_group || null, genotype || null, allergies || null, phone || null, address || null, req.user.id]
+        `INSERT INTO patients (university_id, patient_type, full_name, dob, gender, blood_group, genotype, allergies, phone, address, registered_by, linked_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+        [university_id || null, patient_type, full_name, dob || null, gender || null, blood_group || null, genotype || null, allergies || null, phone || null, address || null, req.user.id, linkedUserId]
       );
     });
     res.status(201).json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Link (or re-link) an existing clinical record to a patient's portal login account
+app.patch('/api/patients/:id/link-account', authenticate, authorize(['admin', 'receptionist']), async (req, res) => {
+  const { linked_user_email } = req.body;
+  if (!linked_user_email) return res.status(400).json({ error: 'Portal account email is required.' });
+  try {
+    const found = await pool.query("SELECT id FROM users WHERE email = $1 AND role = 'patient'", [linked_user_email]);
+    if (found.rows.length === 0) return res.status(400).json({ error: 'No patient portal account found with that email.' });
+    const alreadyLinked = await pool.query('SELECT id FROM patients WHERE linked_user_id = $1', [found.rows[0].id]);
+    if (alreadyLinked.rows.length > 0) return res.status(400).json({ error: 'That portal account is already linked to a clinical record.' });
+    await withTransaction(req.user.id, async (client) => {
+      await client.query('UPDATE patients SET linked_user_id = $1 WHERE id = $2', [found.rows[0].id, req.params.id]);
+    });
+    res.json({ message: 'Portal account linked successfully.' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -218,7 +245,16 @@ app.get('/api/patients', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Full demographic profile for a single patient (used by Doctor/Nurse EMR panel)
+// The logged-in patient's own clinical record (used by the Patient portal)
+app.get('/api/patients/me', authenticate, authorize(['patient']), async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM patients WHERE linked_user_id = $1', [req.user.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'No clinical record is linked to this account yet. Please visit Reception with your university ID to have your record linked.' });
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Full demographic profile for a single patient (used by Doctor/Reception EMR panel)
 app.get('/api/patients/:id', authenticate, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM patients WHERE id = $1', [req.params.id]);
@@ -278,7 +314,7 @@ app.put('/api/queue/:id/status', authenticate, authorize(['doctor', 'nurse', 're
 });
 
 // --- 5. CLINICAL RECORDS & EMR ----------------------------------------------
-app.post('/api/vitals', authenticate, authorize(['nurse', 'doctor', 'admin']), async (req, res) => {
+app.post('/api/vitals', authenticate, authorize(['nurse', 'receptionist', 'doctor', 'admin']), async (req, res) => {
   const { patient_id, blood_pressure, temperature, weight, heart_rate } = req.body;
   if (!patient_id || !blood_pressure || !temperature || !weight || !heart_rate) {
     return res.status(400).json({ error: 'All vitals fields are required.' });
@@ -320,40 +356,54 @@ app.post('/api/consultations', authenticate, authorize(['doctor']), async (req, 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Consolidated EMR timeline — everything a clinician needs about a patient
-// in one call: vitals, consultations, lab history, prescriptions + items,
-// certificates, immunizations, and billing history.
-app.get('/api/emr/history/:patient_id', authenticate, authorize(['doctor', 'nurse', 'admin', 'lab_tech', 'pharmacist']), async (req, res) => {
-  const pid = req.params.patient_id;
+// Consolidated EMR timeline — everything a clinician (or the patient) needs
+// about a patient in one call: vitals, consultations, lab history,
+// prescriptions + items, certificates, immunizations, and billing history.
+const getEmrBundle = async (pid) => {
+  const [consultations, vitals, labRequests, prescriptions, certificates, immunizations, invoices] = await Promise.all([
+    pool.query('SELECT c.*, u.name as doctor_name FROM consultations c JOIN users u ON c.doctor_id = u.id WHERE c.patient_id = $1 ORDER BY c.created_at DESC', [pid]),
+    pool.query('SELECT v.*, u.name as nurse_name FROM vitals v JOIN users u ON v.nurse_id = u.id WHERE v.patient_id = $1 ORDER BY v.recorded_at DESC', [pid]),
+    pool.query('SELECT l.*, d.name as doctor_name FROM lab_requests l JOIN consultations c ON l.consultation_id = c.id JOIN users d ON c.doctor_id = d.id WHERE l.patient_id = $1 ORDER BY l.requested_at DESC', [pid]),
+    pool.query('SELECT p.*, u.name as doctor_name FROM prescriptions p JOIN users u ON p.doctor_id = u.id WHERE p.patient_id = $1 ORDER BY p.created_at DESC', [pid]),
+    pool.query('SELECT ce.*, u.name as doctor_name FROM certificates ce JOIN users u ON ce.doctor_id = u.id WHERE ce.patient_id = $1 ORDER BY ce.created_at DESC', [pid]),
+    pool.query('SELECT im.*, u.name as nurse_name FROM immunizations im JOIN users u ON im.nurse_id = u.id WHERE im.patient_id = $1 ORDER BY im.administered_at DESC', [pid]),
+    pool.query('SELECT * FROM billing_invoices WHERE patient_id = $1 ORDER BY created_at DESC', [pid])
+  ]);
+
+  for (const rx of prescriptions.rows) {
+    const items = await pool.query(
+      'SELECT pi.*, i.item_name, i.unit_price FROM prescription_items pi JOIN inventory i ON pi.inventory_id = i.id WHERE pi.prescription_id = $1',
+      [rx.id]
+    );
+    rx.items = items.rows;
+  }
+
+  return {
+    consultations: consultations.rows,
+    vitals: vitals.rows,
+    lab_requests: labRequests.rows,
+    prescriptions: prescriptions.rows,
+    certificates: certificates.rows,
+    immunizations: immunizations.rows,
+    invoices: invoices.rows
+  };
+};
+
+// A patient viewing their own EMR — resolved via their linked clinical
+// record rather than trusting a client-supplied patient id. Must be
+// registered before the /:patient_id route below, or Express will match
+// "me" as a patient_id first.
+app.get('/api/emr/history/me', authenticate, authorize(['patient']), async (req, res) => {
   try {
-    const [consultations, vitals, labRequests, prescriptions, certificates, immunizations, invoices] = await Promise.all([
-      pool.query('SELECT c.*, u.name as doctor_name FROM consultations c JOIN users u ON c.doctor_id = u.id WHERE c.patient_id = $1 ORDER BY c.created_at DESC', [pid]),
-      pool.query('SELECT v.*, u.name as nurse_name FROM vitals v JOIN users u ON v.nurse_id = u.id WHERE v.patient_id = $1 ORDER BY v.recorded_at DESC', [pid]),
-      pool.query('SELECT l.*, d.name as doctor_name FROM lab_requests l JOIN consultations c ON l.consultation_id = c.id JOIN users d ON c.doctor_id = d.id WHERE l.patient_id = $1 ORDER BY l.requested_at DESC', [pid]),
-      pool.query('SELECT p.*, u.name as doctor_name FROM prescriptions p JOIN users u ON p.doctor_id = u.id WHERE p.patient_id = $1 ORDER BY p.created_at DESC', [pid]),
-      pool.query('SELECT ce.*, u.name as doctor_name FROM certificates ce JOIN users u ON ce.doctor_id = u.id WHERE ce.patient_id = $1 ORDER BY ce.created_at DESC', [pid]),
-      pool.query('SELECT im.*, u.name as nurse_name FROM immunizations im JOIN users u ON im.nurse_id = u.id WHERE im.patient_id = $1 ORDER BY im.administered_at DESC', [pid]),
-      pool.query('SELECT * FROM billing_invoices WHERE patient_id = $1 ORDER BY created_at DESC', [pid])
-    ]);
+    const patient = await pool.query('SELECT id FROM patients WHERE linked_user_id = $1', [req.user.id]);
+    if (patient.rows.length === 0) return res.status(404).json({ error: 'No clinical record is linked to this account yet.' });
+    res.json(await getEmrBundle(patient.rows[0].id));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
-    // Attach line items to each prescription
-    for (const rx of prescriptions.rows) {
-      const items = await pool.query(
-        'SELECT pi.*, i.item_name, i.unit_price FROM prescription_items pi JOIN inventory i ON pi.inventory_id = i.id WHERE pi.prescription_id = $1',
-        [rx.id]
-      );
-      rx.items = items.rows;
-    }
-
-    res.json({
-      consultations: consultations.rows,
-      vitals: vitals.rows,
-      lab_requests: labRequests.rows,
-      prescriptions: prescriptions.rows,
-      certificates: certificates.rows,
-      immunizations: immunizations.rows,
-      invoices: invoices.rows
-    });
+app.get('/api/emr/history/:patient_id', authenticate, authorize(['doctor', 'nurse', 'receptionist', 'admin', 'lab_tech', 'pharmacist']), async (req, res) => {
+  try {
+    res.json(await getEmrBundle(req.params.patient_id));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -540,13 +590,37 @@ app.get('/api/billing/unpaid', authenticate, authorize(['receptionist', 'admin']
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/billing/recent', authenticate, authorize(['receptionist', 'admin']), async (req, res) => {
+// Invoices where a patient has submitted a mock online payment and is
+// waiting on Reception to confirm and issue a receipt.
+app.get('/api/billing/processing', authenticate, authorize(['receptionist', 'admin']), async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT b.*, p.full_name as patient_name, p.university_id
       FROM billing_invoices b JOIN patients p ON b.patient_id = p.id
+      WHERE b.status = 'processing' ORDER BY b.initiated_at ASC
+    `);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/billing/recent', authenticate, authorize(['receptionist', 'admin']), async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT b.*, p.full_name as patient_name, p.university_id, u.name as confirmed_by_name
+      FROM billing_invoices b JOIN patients p ON b.patient_id = p.id
+      LEFT JOIN users u ON b.confirmed_by = u.id
       WHERE b.status = 'paid' ORDER BY b.paid_at DESC LIMIT 20
     `);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// The logged-in patient's own invoices
+app.get('/api/billing/me', authenticate, authorize(['patient']), async (req, res) => {
+  try {
+    const patient = await pool.query('SELECT id FROM patients WHERE linked_user_id = $1', [req.user.id]);
+    if (patient.rows.length === 0) return res.status(404).json({ error: 'No clinical record is linked to this account yet.' });
+    const result = await pool.query('SELECT * FROM billing_invoices WHERE patient_id = $1 ORDER BY created_at DESC', [patient.rows[0].id]);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -562,12 +636,48 @@ app.post('/api/billing', authenticate, authorize(['receptionist', 'admin']), asy
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/billing/:id/pay', authenticate, authorize(['receptionist', 'admin']), async (req, res) => {
+// Step 1 of 2: the patient submits a MOCK online payment. No real payment
+// processor is involved — this simply moves the invoice into a
+// "processing" state with a generated reference, pending Reception's
+// confirmation. This intentionally mirrors a real payment-gateway
+// hand-off (submit -> pending -> reconciled) without touching real money.
+app.post('/api/billing/:id/pay-mock', authenticate, authorize(['patient']), async (req, res) => {
   try {
+    const patient = await pool.query('SELECT id FROM patients WHERE linked_user_id = $1', [req.user.id]);
+    if (patient.rows.length === 0) return res.status(404).json({ error: 'No clinical record is linked to this account yet.' });
+
+    const invoice = await pool.query('SELECT * FROM billing_invoices WHERE id = $1', [req.params.id]);
+    if (invoice.rows.length === 0) return res.status(404).json({ error: 'Invoice not found.' });
+    if (invoice.rows[0].patient_id !== patient.rows[0].id) return res.status(403).json({ error: 'You may only pay your own invoices.' });
+    if (invoice.rows[0].status !== 'unpaid') return res.status(400).json({ error: `This invoice is already ${invoice.rows[0].status}.` });
+
+    const reference = `MOCK-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
     await withTransaction(req.user.id, async (client) => {
-      await client.query("UPDATE billing_invoices SET status = 'paid', paid_at = CURRENT_TIMESTAMP WHERE id = $1", [req.params.id]);
+      await client.query(
+        "UPDATE billing_invoices SET status = 'processing', payment_method = 'mock_card', payment_reference = $1, initiated_at = CURRENT_TIMESTAMP WHERE id = $2",
+        [reference, req.params.id]
+      );
     });
-    res.json({ message: 'Payment recorded and receipt generated.' });
+    res.json({ message: 'Mock payment submitted successfully. Reception will confirm your payment shortly.', reference });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Step 2 of 2: Reception (or Admin) confirms the payment — whether it came
+// in as a mock online payment or cash/in-person at the front desk.
+app.put('/api/billing/:id/confirm', authenticate, authorize(['receptionist', 'admin']), async (req, res) => {
+  try {
+    const invoice = await pool.query('SELECT * FROM billing_invoices WHERE id = $1', [req.params.id]);
+    if (invoice.rows.length === 0) return res.status(404).json({ error: 'Invoice not found.' });
+    if (invoice.rows[0].status === 'paid') return res.status(400).json({ error: 'This invoice has already been paid.' });
+
+    await withTransaction(req.user.id, async (client) => {
+      await client.query(
+        `UPDATE billing_invoices SET status = 'paid', paid_at = CURRENT_TIMESTAMP, confirmed_by = $1,
+         payment_method = COALESCE(payment_method, 'cash') WHERE id = $2`,
+        [req.user.id, req.params.id]
+      );
+    });
+    res.json({ message: 'Payment confirmed and receipt generated.' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -586,7 +696,7 @@ app.post('/api/certificates', authenticate, authorize(['doctor']), async (req, r
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/immunizations', authenticate, authorize(['nurse', 'admin']), async (req, res) => {
+app.post('/api/immunizations', authenticate, authorize(['nurse', 'receptionist', 'admin']), async (req, res) => {
   const { patient_id, vaccine_name, dose_number, next_due_date } = req.body;
   if (!patient_id || !vaccine_name || !dose_number) return res.status(400).json({ error: 'Patient, vaccine and dose are required.' });
   try {
@@ -600,7 +710,7 @@ app.post('/api/immunizations', authenticate, authorize(['nurse', 'admin']), asyn
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/immunizations/:patient_id', authenticate, authorize(['nurse', 'doctor', 'admin']), async (req, res) => {
+app.get('/api/immunizations/:patient_id', authenticate, authorize(['nurse', 'receptionist', 'doctor', 'admin']), async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT im.*, u.name as nurse_name FROM immunizations im JOIN users u ON im.nurse_id = u.id WHERE im.patient_id = $1 ORDER BY im.administered_at DESC',
@@ -613,14 +723,15 @@ app.get('/api/immunizations/:patient_id', authenticate, authorize(['nurse', 'doc
 // --- 10. SYSTEM ANALYTICS & AUDIT LOGS ---------------------------------------
 app.get('/api/analytics', authenticate, authorize(['admin']), async (req, res) => {
   try {
-    const [totalPatients, consultationsToday, pendingLabs, lowStockItems, revenue, roleBreakdown, weeklyRegistrations] = await Promise.all([
+    const [totalPatients, consultationsToday, pendingLabs, lowStockItems, revenue, roleBreakdown, weeklyRegistrations, processingPayments] = await Promise.all([
       pool.query('SELECT COUNT(*) FROM patients'),
       pool.query('SELECT COUNT(*) FROM consultations WHERE DATE(created_at) = CURRENT_DATE'),
       pool.query("SELECT COUNT(*) FROM lab_requests WHERE status = 'pending'"),
       pool.query('SELECT id, item_name, quantity, reorder_level FROM inventory WHERE quantity <= reorder_level ORDER BY quantity ASC'),
       pool.query("SELECT COALESCE(SUM(total_amount),0) as total FROM billing_invoices WHERE status = 'paid'"),
       pool.query('SELECT role, COUNT(*) FROM users GROUP BY role'),
-      pool.query("SELECT DATE(created_at) as day, COUNT(*) FROM patients WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY DATE(created_at) ORDER BY day")
+      pool.query("SELECT DATE(created_at) as day, COUNT(*) FROM patients WHERE created_at > NOW() - INTERVAL '7 days' GROUP BY DATE(created_at) ORDER BY day"),
+      pool.query("SELECT COUNT(*), COALESCE(SUM(total_amount),0) as total FROM billing_invoices WHERE status = 'processing'")
     ]);
     res.json({
       totalPatients: totalPatients.rows[0].count,
@@ -630,7 +741,67 @@ app.get('/api/analytics', authenticate, authorize(['admin']), async (req, res) =
       lowStockItems: lowStockItems.rows,
       revenue: revenue.rows[0].total,
       roleBreakdown: roleBreakdown.rows,
-      weeklyRegistrations: weeklyRegistrations.rows
+      weeklyRegistrations: weeklyRegistrations.rows,
+      processingCount: processingPayments.rows[0].count,
+      processingTotal: processingPayments.rows[0].total
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Deep reporting bundle for the Admin "Reports & Analytics" workspace:
+// EMR activity, prescription/dispensary performance, payment breakdowns,
+// inventory value, and patient demographics — all in one call.
+app.get('/api/analytics/detailed', authenticate, authorize(['admin']), async (req, res) => {
+  try {
+    const [
+      consultationsTrend, topDiagnoses,
+      prescriptionTotals, topDrugs,
+      revenueTrend, revenueByType, outstanding,
+      inventoryValue, inventoryByCategory, topDispensed,
+      patientsByType, patientsByGender
+    ] = await Promise.all([
+      pool.query("SELECT DATE(created_at) as day, COUNT(*) FROM consultations WHERE created_at > NOW() - INTERVAL '14 days' GROUP BY DATE(created_at) ORDER BY day"),
+      pool.query("SELECT diagnosis, COUNT(*) as count FROM consultations GROUP BY diagnosis ORDER BY count DESC LIMIT 5"),
+      pool.query("SELECT status, COUNT(*) FROM prescriptions GROUP BY status"),
+      pool.query(`SELECT i.item_name, SUM(pi.quantity_prescribed) as total_qty
+                  FROM prescription_items pi JOIN inventory i ON pi.inventory_id = i.id
+                  WHERE pi.dispensed = TRUE GROUP BY i.item_name ORDER BY total_qty DESC LIMIT 5`),
+      pool.query("SELECT DATE(paid_at) as day, COALESCE(SUM(total_amount),0) as total FROM billing_invoices WHERE status = 'paid' AND paid_at > NOW() - INTERVAL '14 days' GROUP BY DATE(paid_at) ORDER BY day"),
+      pool.query("SELECT reference_type, COALESCE(SUM(total_amount),0) as total FROM billing_invoices WHERE status = 'paid' GROUP BY reference_type"),
+      pool.query("SELECT COALESCE(SUM(total_amount),0) as total, COUNT(*) FROM billing_invoices WHERE status = 'unpaid'"),
+      pool.query("SELECT COALESCE(SUM(quantity * unit_price),0) as total FROM inventory"),
+      pool.query("SELECT category, COUNT(*) as items, COALESCE(SUM(quantity),0) as units FROM inventory GROUP BY category"),
+      pool.query(`SELECT i.item_name, SUM(pi.quantity_prescribed) as total_qty, COALESCE(SUM(pi.quantity_prescribed * i.unit_price),0) as total_value
+                  FROM prescription_items pi JOIN inventory i ON pi.inventory_id = i.id
+                  WHERE pi.dispensed = TRUE GROUP BY i.item_name ORDER BY total_value DESC LIMIT 5`),
+      pool.query('SELECT patient_type, COUNT(*) FROM patients GROUP BY patient_type'),
+      pool.query('SELECT gender, COUNT(*) FROM patients WHERE gender IS NOT NULL GROUP BY gender')
+    ]);
+
+    res.json({
+      emr: {
+        consultationsTrend: consultationsTrend.rows,
+        topDiagnoses: topDiagnoses.rows
+      },
+      prescriptions: {
+        totalsByStatus: prescriptionTotals.rows,
+        topDrugsDispensed: topDrugs.rows
+      },
+      payments: {
+        revenueTrend: revenueTrend.rows,
+        revenueByType: revenueByType.rows,
+        outstandingTotal: outstanding.rows[0].total,
+        outstandingCount: outstanding.rows[0].count
+      },
+      inventory: {
+        totalValue: inventoryValue.rows[0].total,
+        byCategory: inventoryByCategory.rows,
+        topDispensedByValue: topDispensed.rows
+      },
+      patients: {
+        byType: patientsByType.rows,
+        byGender: patientsByGender.rows
+      }
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
